@@ -113,8 +113,9 @@ static_assert(offsetof(KpcrBareMetal64, savedReturnRip) == 0x40);
 static_assert(offsetof(KpcrBareMetal64, savedReturnRsp) == 0x48);
 static_assert(offsetof(KpcrBareMetal64, savedGprs) == 0x50);
 
-// Dedicated 16 KB stacks for up to 16 hardware cores (256 KB total in kernel BSS)
+// Dedicated 16 KB stacks + 8 KB #DF IST1 stacks for up to 16 hardware cores
 alignas(4096) static uint8_t s_apKernelStacks[MAX_HW_CORES][16384]{};
+alignas(4096) static uint8_t s_apIst1Stacks[MAX_HW_CORES][8192]{};
 
 // ============================================================================
 // 2b. Hardware Multi-Core Ring-3 Worker Thread Descriptor
@@ -135,7 +136,7 @@ struct alignas(64) SmpThreadSlot {
     volatile uint32_t executedOnApicId{0};
     volatile uint32_t exitCode{SMP_STILL_ACTIVE};
     volatile uint32_t syscallsExecuted{0};
-    uint32_t          reserved0{0};
+    uint32_t          pagesMapped{0};
     uint64_t          cr3Phys{0};
     uint64_t          startAddress{0};
     uint64_t          parameter{0};
@@ -317,7 +318,8 @@ private:
     void armApForRing3(KpcrBareMetal64& kpcr) noexcept {
         std::memset(&kpcr.tss, 0, sizeof(kpcr.tss));
         kpcr.tss.rsp0 = kpcr.kernelStackTop;
-        kpcr.tss.ist1 = kpcr.kernelStackTop;
+        size_t coreIdx = (kpcr.logicalCoreIdx < MAX_HW_CORES) ? kpcr.logicalCoreIdx : 0;
+        kpcr.tss.ist1 = (reinterpret_cast<uint64_t>(&s_apIst1Stacks[coreIdx][0]) + sizeof(s_apIst1Stacks[0])) & ~0xFULL;
         kpcr.tss.ioMapBase = sizeof(micant::cpu::TaskStateSegment64);
 
         std::memset(&kpcr.gdt, 0, sizeof(kpcr.gdt));
@@ -458,10 +460,10 @@ private:
             "movq %%r11, %%rdx\n\t"
             "shrq $32, %%rdx\n\t"
             "wrmsr\n\t"
-            // Build hardware IRETQ frame -> CPL=3 (CS=0x33, SS=0x2B, RFLAGS=0x0002)
+            // Build hardware IRETQ frame -> CPL=3 (CS=0x33, SS=0x2B, RFLAGS=0x0202 IF=1!)
             "pushq $0x002B\n\t"
             "pushq 0x10(%%r9)\n\t"
-            "pushq $0x0002\n\t"
+            "pushq $0x0202\n\t"
             "pushq $0x0033\n\t"
             "pushq 0x18(%%r9)\n\t"
             // Pass Win64 ABI args: RCX = lpParameter, RDX = lpStartAddress
@@ -880,6 +882,7 @@ public:
             // Reclaim any already-terminated slot if all slots were used
             for (size_t i = 1; i < MAX_SMP_THREADS; ++i) {
                 if (__atomic_load_n(&m_threads[i].state, __ATOMIC_ACQUIRE) == static_cast<uint32_t>(SmpThreadState::Terminated)) {
+                    reclaimThreadPages(i);
                     slotIdx = i;
                     break;
                 }
@@ -933,6 +936,7 @@ public:
         th.executedOnApicId = 0xFFFFFFFFu;
         th.exitCode = SMP_STILL_ACTIVE;
         th.syscallsExecuted = 0;
+        th.pagesMapped = 1;
         th.cr3Phys = procCr3Phys;
         th.startAddress = startAddress;
         th.parameter = parameter;
@@ -974,6 +978,20 @@ public:
         return false;
     }
 
+    void reclaimThreadPages(size_t slotIdx) noexcept {
+        if (slotIdx == 0 || slotIdx >= MAX_SMP_THREADS) return;
+        auto& th = m_threads[slotIdx];
+        if (!th.pagesMapped || th.cr3Phys == 0) return;
+        uint64_t stackBaseVa = 0x00000080'00200000ULL + (static_cast<uint64_t>(slotIdx) * 0x10000ULL);
+        uint64_t tebVa       = 0x00000080'00310000ULL + (static_cast<uint64_t>(slotIdx) * 0x1000ULL);
+        for (uint64_t p = 0; p < 16; ++p) {
+            micant::km::mm_baremetal::BareMetalPaging::unmapVirtualPage(th.cr3Phys, stackBaseVa + p * 4096ULL, true);
+        }
+        micant::km::mm_baremetal::BareMetalPaging::unmapVirtualPage(th.cr3Phys, tebVa, true);
+        th.pagesMapped = 0;
+        th.cr3Phys = 0;
+    }
+
     void waitAllThreadsForProcess(uint32_t ownerPid) noexcept {
         for (size_t i = 1; i < MAX_SMP_THREADS; ++i) {
             if (m_threads[i].ownerPid == ownerPid) {
@@ -982,6 +1000,9 @@ public:
                     st == static_cast<uint32_t>(SmpThreadState::Running)) {
                     waitForThreadHandle(SMP_THREAD_HANDLE_TAG | i);
                 }
+                // Parent CR3 destroyProcessPml4() reclaims all PML4[1] pages right after this call
+                m_threads[i].pagesMapped = 0;
+                m_threads[i].cr3Phys = 0;
                 __atomic_store_n(&m_threads[i].state, static_cast<uint32_t>(SmpThreadState::Free), __ATOMIC_RELEASE);
                 m_threads[i].ownerPid = 0;
             }
@@ -990,7 +1011,7 @@ public:
 
     bool queryThreadExitCode(uint64_t hThread, uint32_t& outExitCode) noexcept {
         outExitCode = SMP_STILL_ACTIVE;
-        if ((hThread & SMP_THREAD_HANDLE_TAG) == 0) return false;
+        if ((hThread & 0xFF000000ULL) != SMP_THREAD_HANDLE_TAG) return false;
         size_t slotIdx = static_cast<size_t>(hThread & ~SMP_THREAD_HANDLE_TAG);
         if (slotIdx == 0 || slotIdx >= MAX_SMP_THREADS) return false;
         auto& th = m_threads[slotIdx];
@@ -1003,11 +1024,12 @@ public:
     }
 
     bool closeThreadHandle(uint64_t hThread) noexcept {
-        if ((hThread & SMP_THREAD_HANDLE_TAG) == 0) return false;
+        if ((hThread & 0xFF000000ULL) != SMP_THREAD_HANDLE_TAG) return false;
         size_t slotIdx = static_cast<size_t>(hThread & ~SMP_THREAD_HANDLE_TAG);
         if (slotIdx == 0 || slotIdx >= MAX_SMP_THREADS) return false;
         auto& th = m_threads[slotIdx];
         if (__atomic_load_n(&th.state, __ATOMIC_ACQUIRE) == static_cast<uint32_t>(SmpThreadState::Terminated)) {
+            reclaimThreadPages(slotIdx);
             th.ownerPid = 0;
             __atomic_store_n(&th.state, static_cast<uint32_t>(SmpThreadState::Free), __ATOMIC_RELEASE);
         }

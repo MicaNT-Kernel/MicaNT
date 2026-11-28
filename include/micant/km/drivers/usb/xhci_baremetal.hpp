@@ -450,6 +450,7 @@ public:
         KernelLogSink::print("\r\n[xHCI] Scanning PCI Bus for Intel xHCI Controller...\r\n");
 
         // 1. Probe PCI 00:14.0 (Intel Sunrise Point / C230 Series xHCI)
+        uint8_t foundBus = 0, foundDev = 20, foundFn = 0;
         uint32_t devVen = pciRead32(0, 20, 0, 0x00);
         uint16_t vendor = devVen & 0xFFFF;
         uint16_t device = (devVen >> 16) & 0xFFFF;
@@ -457,19 +458,31 @@ public:
         if (vendor != 0x8086 || device != 0xA12F) {
             KernelLogSink::print("[xHCI] Note: PCI 00:14.0 vendor/device (0x");
             KernelLogSink::printHex(devVen);
-            KernelLogSink::print(") did not match default, searching bus...\r\n");
+            KernelLogSink::print(") did not match default, searching PCI buses...\r\n");
             bool found = false;
-            for (uint8_t d = 0; d < 32; ++d) {
-                uint32_t id = pciRead32(0, d, 0, 0x00);
-                uint32_t cl = pciRead32(0, d, 0, 0x08);
-                if ((cl >> 16) == 0x0C03) { // Serial Bus / USB xHCI
-                    vendor = id & 0xFFFF;
-                    device = (id >> 16) & 0xFFFF;
-                    found = true;
-                    KernelLogSink::print("[xHCI] Found xHCI Controller at PCI 00:");
-                    KernelLogSink::printDec(d);
-                    KernelLogSink::print(".0 (Vendor=0x8086)\r\n");
-                    break;
+            for (uint8_t bus = 0; bus < 8 && !found; ++bus) {
+                for (uint8_t d = 0; d < 32 && !found; ++d) {
+                    for (uint8_t fn = 0; fn < 8 && !found; ++fn) {
+                        uint32_t id = pciRead32(bus, d, fn, 0x00);
+                        if (id == 0xFFFFFFFFu) {
+                            if (fn == 0) break;
+                            continue;
+                        }
+                        uint32_t cl = pciRead32(bus, d, fn, 0x08);
+                        if (((cl >> 8) & 0xFFFFFFu) == 0x0C0330u) { // Class 0C, Subclass 03, ProgIF 30 (xHCI!)
+                            vendor = id & 0xFFFF;
+                            device = (id >> 16) & 0xFFFF;
+                            foundBus = bus; foundDev = d; foundFn = fn;
+                            found = true;
+                            KernelLogSink::print("[xHCI] Found xHCI Controller at PCI ");
+                            KernelLogSink::printDec(bus);
+                            KernelLogSink::print(":");
+                            KernelLogSink::printDec(d);
+                            KernelLogSink::print(".");
+                            KernelLogSink::printDec(fn);
+                            KernelLogSink::print("\r\n");
+                        }
+                    }
                 }
             }
             if (!found) {
@@ -479,12 +492,17 @@ public:
             }
         }
 
-        // Enable Bus Master + Memory Space
-        uint32_t pciCmd = pciRead32(0, 20, 0, 0x04);
-        pciWrite32(0, 20, 0, 0x04, pciCmd | 0x0006);
+        // Enable Bus Master + Memory Space on the ACTUALLY discovered PCI function!
+        uint32_t pciCmd = pciRead32(foundBus, foundDev, foundFn, 0x04);
+        pciWrite32(foundBus, foundDev, foundFn, 0x04, pciCmd | 0x0006);
 
-        // Read BAR0 (MMIO Base)
-        uint32_t bar0 = pciRead32(0, 20, 0, 0x10) & ~0xFULL;
+        // Read BAR0 (MMIO Base, 64-bit aware)
+        uint32_t bar0Raw = pciRead32(foundBus, foundDev, foundFn, 0x10);
+        uint64_t bar0 = static_cast<uint64_t>(bar0Raw & ~0xFULL);
+        if ((bar0Raw & 0x06u) == 0x04u) { // 64-bit MMIO BAR
+            uint32_t bar1Raw = pciRead32(foundBus, foundDev, foundFn, 0x14);
+            bar0 |= (static_cast<uint64_t>(bar1Raw) << 32);
+        }
         if (bar0 == 0) bar0 = 0xA2D00000; // Physical hardware default on Supermicro X11SSH-F
 
         m_mmioBase = micant::hal::highhalf::toHighCanonical(bar0);

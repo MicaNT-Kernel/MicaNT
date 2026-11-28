@@ -157,6 +157,32 @@ private:
     uint64_t       m_totalWaitWakeups{0};
     uint64_t       m_totalProcessesCreated{0};
     uint64_t       m_totalProcessesExited{0};
+    uint64_t       m_totalPagesReclaimed{0};
+    uint64_t       m_totalSlotsRecycled{0};
+
+    struct ExitHistoryEntry { uint32_t pid{0}; uint32_t exitCode{0}; };
+    static constexpr size_t MAX_EXIT_HISTORY = 32;
+    ExitHistoryEntry m_exitHistory[MAX_EXIT_HISTORY]{};
+    size_t           m_exitHistoryHead{0};
+
+    static inline void saveFxState(Cr3ProcessSlot& slot) noexcept {
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        __asm__ __volatile__("fxsave64 (%0)" : : "r"(slot.fxState) : "memory");
+        slot.fxValid = true;
+#else
+        (void)slot;
+#endif
+    }
+
+    static inline void restoreFxState(const Cr3ProcessSlot& slot) noexcept {
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        if (slot.fxValid) {
+            __asm__ __volatile__("fxrstor64 (%0)" : : "r"(slot.fxState) : "memory");
+        }
+#else
+        (void)slot;
+#endif
+    }
 
     static inline uint64_t readCr3() noexcept {
         uint64_t cr3 = 0;
@@ -229,6 +255,10 @@ public:
         m_totalWaitWakeups = 0;
         m_totalProcessesCreated = 0;
         m_totalProcessesExited = 0;
+        m_totalPagesReclaimed = 0;
+        m_totalSlotsRecycled = 0;
+        m_exitHistoryHead = 0;
+        for (size_t i = 0; i < MAX_EXIT_HISTORY; ++i) m_exitHistory[i] = ExitHistoryEntry{};
         for (size_t i = 0; i < MAX_PROCS; ++i) {
             m_procs[i] = Cr3ProcessSlot{};
         }
@@ -240,6 +270,10 @@ public:
     [[nodiscard]] Cr3ProcessSlot* getCurrentProcess() noexcept {
         return (m_currentIdx < MAX_PROCS && m_procs[m_currentIdx].inUse) ? &m_procs[m_currentIdx] : nullptr;
     }
+    [[nodiscard]] const Cr3ProcessSlot* findProcessByPid(uint32_t pid) const noexcept {
+        int idx = findSlotByPid(pid);
+        return (idx >= 0) ? &m_procs[idx] : nullptr;
+    }
     [[nodiscard]] const Cr3ProcessSlot* getSlot(size_t idx) const noexcept {
         return (idx < MAX_PROCS && m_procs[idx].inUse) ? &m_procs[idx] : nullptr;
     }
@@ -250,6 +284,8 @@ public:
     [[nodiscard]] uint64_t getTotalWaitWakeups() const noexcept { return m_totalWaitWakeups; }
     [[nodiscard]] uint64_t getTotalProcessesCreated() const noexcept { return m_totalProcessesCreated; }
     [[nodiscard]] uint64_t getTotalProcessesExited() const noexcept { return m_totalProcessesExited; }
+    [[nodiscard]] uint64_t getTotalPagesReclaimed() const noexcept { return m_totalPagesReclaimed; }
+    [[nodiscard]] uint64_t getTotalSlotsRecycled() const noexcept { return m_totalSlotsRecycled; }
 
     /**
      * @brief Create a fully isolated Ring-3 Win32 PE32+ process with its OWN hardware CR3,
@@ -273,6 +309,23 @@ public:
                 break;
             }
         }
+        if (freeSlot < 0) {
+            // Recycle the oldest Terminated slot (its exitCode is preserved in m_exitHistory!)
+            uint32_t oldestPid = 0xFFFFFFFFu;
+            for (size_t i = 0; i < MAX_PROCS; ++i) {
+                if (m_procs[i].inUse && m_procs[i].state == Cr3ProcState::Terminated && m_procs[i].pid < oldestPid) {
+                    oldestPid = m_procs[i].pid;
+                    freeSlot = static_cast<int>(i);
+                }
+            }
+            if (freeSlot >= 0) {
+                if (m_procs[freeSlot].cr3Phys != 0) {
+                    m_totalPagesReclaimed += mm_baremetal::BareMetalPaging::destroyProcessPml4(m_procs[freeSlot].cr3Phys);
+                    m_procs[freeSlot].cr3Phys = 0;
+                }
+                m_totalSlotsRecycled++;
+            }
+        }
         if (freeSlot < 0) return -1;
 
         // 1. Read raw PE32+ executable bytes directly off live NTFS 3.1 via AHCI DMA
@@ -287,10 +340,13 @@ public:
 
         // 3. Map private PFN-backed physical pages into canonical PML4[1] virtual layout
         const uint64_t rwxUser = mm_baremetal::PTE_PRESENT | mm_baremetal::PTE_WRITABLE | mm_baremetal::PTE_USER;
-        if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_IMAGE_BASE, PROC_IMAGE_SIZE, rwxUser)) return -1;
-        if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_DLL_BASE,   PROC_DLL_SIZE,   rwxUser)) return -1;
-        if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_STACK_BASE, PROC_STACK_SIZE, rwxUser)) return -1;
-        if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_TEB_BASE,   PROC_TEB_SIZE,   rwxUser)) return -1;
+        if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_IMAGE_BASE, PROC_IMAGE_SIZE, rwxUser) ||
+            !mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_DLL_BASE,   PROC_DLL_SIZE,   rwxUser) ||
+            !mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_STACK_BASE, PROC_STACK_SIZE, rwxUser) ||
+            !mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_TEB_BASE,   PROC_TEB_SIZE,   rwxUser)) {
+            mm_baremetal::BareMetalPaging::destroyProcessPml4(procCr3);
+            return -1;
+        }
 
         auto& slot = m_procs[freeSlot];
         slot = Cr3ProcessSlot{};
@@ -322,6 +378,7 @@ public:
 
         if (!mapped || !importsOk || !allDllsOk || exeMod.entryPointVa == 0) {
             writeCr3(savedCr3);
+            mm_baremetal::BareMetalPaging::destroyProcessPml4(procCr3);
             slot = Cr3ProcessSlot{};
             return -1;
         }
@@ -415,16 +472,25 @@ public:
      */
     bool queryProcessExitCode(uint32_t targetPid, uint32_t& outExitCode, bool& outStillActive) const noexcept {
         int idx = findSlotByPid(targetPid);
-        if (idx < 0) return false;
-        const auto& sl = m_procs[idx];
-        if (sl.state == Cr3ProcState::Terminated) {
-            outStillActive = false;
-            outExitCode = sl.exitCode;
-        } else {
-            outStillActive = true;
-            outExitCode = NT_STILL_ACTIVE;
+        if (idx >= 0) {
+            const auto& sl = m_procs[idx];
+            if (sl.state == Cr3ProcState::Terminated) {
+                outStillActive = false;
+                outExitCode = sl.exitCode;
+            } else {
+                outStillActive = true;
+                outExitCode = NT_STILL_ACTIVE;
+            }
+            return true;
         }
-        return true;
+        for (size_t i = 0; i < MAX_EXIT_HISTORY; ++i) {
+            if (m_exitHistory[i].pid == targetPid && targetPid != 0) {
+                outStillActive = false;
+                outExitCode = m_exitHistory[i].exitCode;
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -536,6 +602,7 @@ public:
         }
 
         cur.trapFrame = *frame;
+        saveFxState(cur);
         cur.state = Cr3ProcState::Waiting;
         cur.waitTargetPid = targetPid;
         cur.waitCount++;
@@ -548,6 +615,7 @@ public:
         outNextCr3 = nxt.cr3Phys;
 
         *frame = nxt.trapFrame;
+        restoreFxState(nxt);
         mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
         writeCr3(nxt.cr3Phys);
         writeGsBase(nxt.tebVa);
@@ -574,6 +642,7 @@ public:
         outNewPid = nxt.pid;
 
         cur.trapFrame = *frame;
+        saveFxState(cur);
         cur.state = Cr3ProcState::Ready;
 
         m_currentIdx = static_cast<size_t>(nextIdx);
@@ -581,6 +650,7 @@ public:
         m_totalVoluntaryYields++;
 
         *frame = nxt.trapFrame;
+        restoreFxState(nxt);
         mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
         writeCr3(nxt.cr3Phys);
         writeGsBase(nxt.tebVa);
@@ -588,7 +658,8 @@ public:
     }
 
     /**
-     * @brief Handle NtTerminateProcess (SSN 0x01) in multi-process CR3 mode, waking any Waiting parents.
+     * @brief Handle NtTerminateProcess (SSN 0x01) in multi-process CR3 mode, waking any Waiting parents
+     *        and immediately reclaiming the terminating process's private PML4[1] PFN pages!
      */
     bool onTerminateSyscall(
         TrapFrame64* frame,
@@ -607,6 +678,13 @@ public:
         cur.exitCode = exitCode;
         cur.state = Cr3ProcState::Terminated;
         m_totalProcessesExited++;
+
+        // Record exit code in ring history so GetExitCodeProcess works even after slot recycling
+        m_exitHistory[m_exitHistoryHead % MAX_EXIT_HISTORY] = ExitHistoryEntry{cur.pid, exitCode};
+        m_exitHistoryHead++;
+
+        uint64_t dyingCr3 = cur.cr3Phys;
+        cur.cr3Phys = 0;
 
         // Wake any parent process blocked in NtWaitForSingleObject(cur.pid)
         for (size_t i = 0; i < MAX_PROCS; ++i) {
@@ -629,17 +707,25 @@ public:
             outNextCr3 = nxt.cr3Phys;
 
             *frame = nxt.trapFrame;
+            restoreFxState(nxt);
             mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
             writeCr3(nxt.cr3Phys);
             writeGsBase(nxt.tebVa);
+            // Safe to reclaim dyingCr3 AFTER hardware CR3 has switched to nxt.cr3Phys!
+            if (dyingCr3 != 0) {
+                m_totalPagesReclaimed += mm_baremetal::BareMetalPaging::destroyProcessPml4(dyingCr3);
+            }
             return false; // Continue running surviving / woken process!
         }
 
-        // All isolated Ring-3 processes exited cleanly -> restore kernel CR3 & VAD!
+        // All isolated Ring-3 processes exited cleanly -> restore kernel CR3 & reclaim remaining PML4s!
         m_active = false;
         mm_baremetal::BareMetalVadTable::setActiveTable(nullptr);
         if (m_kernelCr3Phys != 0) {
             writeCr3(m_kernelCr3Phys);
+        }
+        if (dyingCr3 != 0) {
+            m_totalPagesReclaimed += mm_baremetal::BareMetalPaging::destroyProcessPml4(dyingCr3);
         }
         return true;
     }

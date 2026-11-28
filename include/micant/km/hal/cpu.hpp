@@ -189,10 +189,14 @@ public:
     }
 
     void initialize(uint64_t kernelStackTop, uint64_t kiSystemCall64Address) {
+        // Dedicated 16 KB #DF/#NMI IST1 emergency stack (strictly disjoint from RSP0!)
+        alignas(16) static uint8_t s_bspDoubleFaultIst1Stack[16384];
+        uint64_t ist1Top = (reinterpret_cast<uint64_t>(s_bspDoubleFaultIst1Stack) + sizeof(s_bspDoubleFaultIst1Stack)) & ~0xFULL;
+
         // 1. Initialize Task State Segment (TSS64)
         std::memset(&m_tss, 0, sizeof(m_tss));
         m_tss.rsp0 = kernelStackTop;
-        m_tss.ist1 = kernelStackTop; // Safe IST stack for faults
+        m_tss.ist1 = ist1Top; // Dedicated Double-Fault IST1 stack (immune to RSP0 stack overflow!)
         m_tss.ioMapBase = sizeof(TaskStateSegment64);
 
         // 2. Initialize GDT entries

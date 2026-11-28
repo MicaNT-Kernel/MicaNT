@@ -621,7 +621,9 @@ private:
         tcp->ackNum = bswap32(s.remoteSeq);
         tcp->dataOff = static_cast<uint8_t>((tcpHdrLen / 4) << 4);
         tcp->flags = flags;
-        tcp->window = bswap16(8192);
+        uint32_t usedRx = (s.rxTail >= s.rxHead) ? (s.rxTail - s.rxHead) : (TCP_RX_BUF_CAP - s.rxHead + s.rxTail);
+        uint32_t freeRx = (TCP_RX_BUF_CAP > usedRx + 1u) ? (TCP_RX_BUF_CAP - 1u - usedRx) : 0u;
+        tcp->window = bswap16(static_cast<uint16_t>((freeRx > 65535u) ? 65535u : freeRx));
         tcp->checksum = 0;
         tcp->urgentPtr = 0;
 
@@ -943,13 +945,15 @@ private:
                     bool needAck = false;
                     if (payloadLen > 0) {
                         if (segSeq == s.remoteSeq) {
+                            size_t buffered = 0;
                             for (size_t b = 0; b < payloadLen; ++b) {
                                 uint32_t nextTail = (s.rxTail + 1u) % TCP_RX_BUF_CAP;
                                 if (nextTail == s.rxHead) break;
                                 s_tcpRxStorage[i][s.rxTail] = payload[b];
                                 s.rxTail = nextTail;
+                                buffered++;
                             }
-                            s.remoteSeq += static_cast<uint32_t>(payloadLen);
+                            s.remoteSeq += static_cast<uint32_t>(buffered);
                         }
                         needAck = true;
                     }

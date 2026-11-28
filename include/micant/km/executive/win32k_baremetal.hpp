@@ -566,6 +566,12 @@ public:
         m_screenPitch = video->getPitch();
         m_pixelFormat = video->getPixelFormat();
         m_gopFb = video->getRawBuffer();
+        // Clamp compositor dimensions to the 8 MiB DWM_SHADOW_PHYS_BASE arena so >1080p modes never overflow into surfaces/AC'97 DMA!
+        constexpr uint64_t DWM_SHADOW_BYTES = DWM_SURFACE_PHYS_BASE - DWM_SHADOW_PHYS_BASE; // 8 MiB
+        if (m_screenW > 1920) m_screenW = 1920;
+        if (m_screenW > 0 && static_cast<uint64_t>(m_screenW) * static_cast<uint64_t>(m_screenH) * 4ULL > DWM_SHADOW_BYTES) {
+            m_screenH = static_cast<uint32_t>(DWM_SHADOW_BYTES / (static_cast<uint64_t>(m_screenW) * 4ULL));
+        }
         m_backBuf = reinterpret_cast<uint32_t*>(DWM_SHADOW_PHYS_BASE);
 
         m_mouseX = static_cast<int32_t>(m_screenW / 2);
@@ -669,9 +675,10 @@ public:
         return 0;
     }
 
-    bool destroyWindow(uint64_t hwnd) noexcept {
+    bool destroyWindow(uint64_t hwnd, uint32_t callerPid = 0) noexcept {
         auto* w = findWindow(hwnd);
         if (!w) return false;
+        if (callerPid != 0 && w->ownerPid != callerPid) return false; // Enforce cross-process HWND isolation!
         uint32_t* surfPtr = w->pixels;
         std::memset(w, 0, sizeof(*w));
         w->pixels = surfPtr;
@@ -711,9 +718,10 @@ public:
     }
 
     // Called in caller's CR3 during NtGdiPresentSurface (0x81) when params->reserved == hwnd
-    bool updateWindowSurface(uint64_t hwnd, const uint32_t* userPixels, uint32_t w, uint32_t h, uint32_t srcPitch) noexcept {
+    bool updateWindowSurface(uint64_t hwnd, const uint32_t* userPixels, uint32_t w, uint32_t h, uint32_t srcPitch, uint32_t callerPid = 0) noexcept {
         auto* win = findWindow(hwnd);
         if (!win || !userPixels || !win->pixels || w == 0 || h == 0) return false;
+        if (callerPid != 0 && win->ownerPid != callerPid) return false; // Enforce cross-process HWND ownership!
         uint32_t cw = (w <= 1024) ? w : 1024;
         uint32_t ch = (h <= 900)  ? h : 900;
         uint32_t sp = (srcPitch >= cw) ? srcPitch : cw;
@@ -764,6 +772,9 @@ public:
         pumpHardwareInput();
 
         DwmWindowSlot* win = (hwnd != 0) ? findWindow(hwnd) : nullptr;
+        if (win && ownerPid != 0 && win->ownerPid != ownerPid) {
+            return false; // Prevent cross-process keystroke/message sniffing!
+        }
         if (!win) {
             for (size_t i = 0; i < DWM_MAX_WINDOWS; ++i) {
                 if (m_windows[i].inUse && m_windows[i].ownerPid == ownerPid) {

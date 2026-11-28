@@ -183,6 +183,12 @@ def main():
                     cmd.append(str(ntdll_implib))
                 winmm_implib = repo_root / "build" / "libwinmm.a"
                 cmd.append(f"-Wl,--out-implib,{winmm_implib}")
+            elif name == "ucrtbase.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
+                ucrt_implib = repo_root / "build" / "libucrtbase.a"
+                cmd.append(f"-Wl,--out-implib,{ucrt_implib}")
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")

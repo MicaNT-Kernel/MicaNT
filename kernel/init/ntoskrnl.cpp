@@ -584,6 +584,7 @@ struct BareMetalFileHandleEntry {
     bool     inUse{false};
     bool     isDirectory{false};
     bool     writable{false};
+    uint32_t ownerPid{0};
     char     path[128]{};
     uint64_t mftRecordNumber{0};
     uint64_t fileSize{0};
@@ -637,6 +638,8 @@ static uint64_t openNtfsKernelHandle(const char* asciiPath, uint32_t desiredAcce
             s_kernelFileHandles[i].inUse = true;
             s_kernelFileHandles[i].isDirectory = entry.isDirectory;
             s_kernelFileHandles[i].writable = (!entry.isDirectory) && ((desiredAccess & 0x40000000u) != 0 || creationDisposition != 3);
+            auto* curProc = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get().getCurrentProcess();
+            s_kernelFileHandles[i].ownerPid = curProc ? curProc->pid : 0u;
             copyStr(s_kernelFileHandles[i].path, asciiPath, sizeof(s_kernelFileHandles[i].path));
             s_kernelFileHandles[i].mftRecordNumber = entry.mftRecordNumber;
             s_kernelFileHandles[i].fileSize = entry.fileSize;
@@ -1154,24 +1157,25 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
         case 0x77: { // NtFlushKey
             return micant::km::cm_baremetal::BareMetalConfigManager::get().flushKey(arg1) ? 0ULL : 0xC0000008ULL;
         }
-        case 0x0F: { // NtClose (File, SMP Thread, Registry Key, or Network Socket Handle)
-            if ((arg1 & micant::km::ac97_baremetal::AUDIO_STREAM_HANDLE_TAG) == micant::km::ac97_baremetal::AUDIO_STREAM_HANDLE_TAG) {
+        case 0x0F: { // NtClose (Exact 8-bit Handle Tag Dispatch: Audio / UDP / TCP / Registry / SMP Thread / NTFS File)
+            uint64_t tag = arg1 & 0xFF000000ULL;
+            if (tag == micant::km::ac97_baremetal::AUDIO_STREAM_HANDLE_TAG) {
                 micant::km::ac97_baremetal::BareMetalAc97Engine::get().closeStream(arg1);
                 return 0;
             }
-            if ((arg1 & micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) == micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) {
+            if (tag == micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) {
                 micant::km::e1000_baremetal::BareMetalE1000Engine::get().udpClose(arg1);
                 return 0;
             }
-            if ((arg1 & micant::km::e1000_baremetal::NET_SOCKET_HANDLE_TAG) != 0) {
+            if (tag == micant::km::e1000_baremetal::NET_SOCKET_HANDLE_TAG) {
                 micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpClose(arg1);
                 return 0;
             }
-            if ((arg1 & micant::km::cm_baremetal::REG_KEY_HANDLE_TAG) != 0) {
+            if (tag == micant::km::cm_baremetal::REG_KEY_HANDLE_TAG) {
                 micant::km::cm_baremetal::BareMetalConfigManager::get().closeKey(arg1);
                 return 0;
             }
-            if ((arg1 & micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) != 0) {
+            if (tag == micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) {
                 micant::km::smp_baremetal::BareMetalSmpEngine::get().closeThreadHandle(arg1);
                 return 0;
             }
@@ -1984,11 +1988,12 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         // Fast-path Ring-0 Win32k DWM Compositor & Live Process Telemetry (Zero COM1 flood!)
         if (ssn == 0x83) { // NtUserCreateWindow
             auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             uint64_t hwnd = 0;
-            if (vad && arg1 != 0 && arg1 + sizeof(micant::km::win32k_baremetal::NtCreateWindowReq) <= vad->endVa) {
+            if (micant::km::mm_baremetal::BareMetalVadTable::get().probeUserRange(
+                    arg1, sizeof(micant::km::win32k_baremetal::NtCreateWindowReq), false)) {
                 micant::km::win32k_baremetal::NtCreateWindowReq req{};
                 std::memcpy(&req, reinterpret_cast<const void*>(arg1), sizeof(req));
+                req.title[sizeof(req.title) - 1] = '\0';
                 uint32_t pid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 0;
                 hwnd = dwm.createWindow(pid, req);
                 if (hwnd != 0) {
@@ -2013,19 +2018,20 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
             frame->rax = hwnd;
             return 0;
         }
-        if (ssn == 0x84) { // NtUserDestroyWindow
+        if (ssn == 0x84) { // NtUserDestroyWindow (enforces callerPid == ownerPid!)
             auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
-            bool ok = dwm.destroyWindow(arg1);
+            uint32_t pid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 0;
+            bool ok = dwm.destroyWindow(arg1, pid);
             UartSerial::print("[Win32k] NtUserDestroyWindow (0x84): HWND=0x");
             UartSerial::printHex64(arg1);
-            UartSerial::print(ok ? " -> Destroyed\r\n" : " -> NotFound\r\n");
+            UartSerial::print(ok ? " -> Destroyed\r\n" : " -> Denied/NotFound\r\n");
             frame->rax = ok ? 0ULL : 1ULL;
             return 0;
         }
         if (ssn == 0x85) { // NtUserPeekMessage (Non-blocking Hardware PS/2 Mouse+Kbd Pump + Window Queue Pop)
             auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
-            if (!vad || arg1 == 0 || arg1 + sizeof(micant::km::win32k_baremetal::DwmMsg) > vad->endVa) {
+            if (!micant::km::mm_baremetal::BareMetalVadTable::get().probeUserRange(
+                    arg1, sizeof(micant::km::win32k_baremetal::DwmMsg), true)) {
                 frame->rax = 0;
                 return 0;
             }
@@ -2039,24 +2045,32 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
             return 0;
         }
         if (ssn == 0x81) { // Fast-path NtGdiPresentSurface for DWM Composited Windows (params->reserved >= 0x10001)
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
-            if (vad && arg1 != 0 && arg1 + sizeof(micant::um::UserPresentSurfaceParams64) <= vad->endVa) {
-                const auto* p = reinterpret_cast<const micant::um::UserPresentSurfaceParams64*>(arg1);
-                if (p->reserved >= micant::km::win32k_baremetal::DWM_HWND_BASE) {
-                    const auto* surfVad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(p->surfaceBufferVa);
-                    if (surfVad && p->surfaceBufferVa != 0) {
+            auto& vadTbl = micant::km::mm_baremetal::BareMetalVadTable::get();
+            if (vadTbl.probeUserRange(arg1, sizeof(micant::um::UserPresentSurfaceParams64), false)) {
+                micant::um::UserPresentSurfaceParams64 p{};
+                std::memcpy(&p, reinterpret_cast<const void*>(arg1), sizeof(p));
+                if (p.reserved >= micant::km::win32k_baremetal::DWM_HWND_BASE) {
+                    uint32_t cw = (p.width <= 1024u) ? p.width : 1024u;
+                    uint32_t ch = (p.height <= 900u) ? p.height : 900u;
+                    uint32_t sp = (p.pitch >= cw) ? p.pitch : cw;
+                    uint64_t bytesNeeded = (ch > 0 && sp <= 4096u) ? (static_cast<uint64_t>(ch) * static_cast<uint64_t>(sp) * 4ULL) : 0ULL;
+                    if (bytesNeeded > 0 && vadTbl.probeUserRange(p.surfaceBufferVa, bytesNeeded, false)) {
                         auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+                        uint32_t pid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 0;
                         bool ok = dwm.updateWindowSurface(
-                            p->reserved,
-                            reinterpret_cast<const uint32_t*>(p->surfaceBufferVa),
-                            p->width,
-                            p->height,
-                            p->pitch
+                            p.reserved,
+                            reinterpret_cast<const uint32_t*>(p.surfaceBufferVa),
+                            cw,
+                            ch,
+                            sp,
+                            pid
                         );
                         s_guiWindowDirtyOnGop = true;
                         frame->rax = ok ? 0ULL : 1ULL;
                         return 0;
                     }
+                    frame->rax = 0xC0000005ULL;
+                    return 0;
                 }
             }
         }
@@ -2067,18 +2081,19 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         }
         if (ssn == 0x9C) { // Fast-path NtNetSocketAccept (Zero COM1 flood while waiting for inbound TCP SYN!)
             struct NtNetAccK { uint64_t hListen; uint64_t outClient; uint32_t peerIp; uint16_t peerPort; uint16_t res; };
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
-            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetAccK) > vad->endVa) {
+            if (!micant::km::mm_baremetal::BareMetalVadTable::get().probeUserRange(arg1, sizeof(NtNetAccK), true)) {
                 frame->rax = 0xC0000005ULL;
                 return 0;
             }
-            auto* req = reinterpret_cast<NtNetAccK*>(arg1);
+            NtNetAccK req{};
+            std::memcpy(&req, reinterpret_cast<const void*>(arg1), sizeof(req));
             uint32_t pip = 0; uint16_t pport = 0;
-            uint64_t hc = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpAcceptNonBlocking(req->hListen, pip, pport);
+            uint64_t hc = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpAcceptNonBlocking(req.hListen, pip, pport);
             if (hc != 0) {
-                req->outClient = hc;
-                req->peerIp = pip;
-                req->peerPort = pport;
+                req.outClient = hc;
+                req.peerIp = pip;
+                req.peerPort = pport;
+                std::memcpy(reinterpret_cast<void*>(arg1), &req, sizeof(req));
                 UartSerial::print("  -> NtNetSocketAccept (0x9C e1000 Server TCP): ACCEPTED ");
                 UartSerial::printDec(pip & 0xFFu); UartSerial::putChar('.');
                 UartSerial::printDec((pip >> 8) & 0xFFu); UartSerial::putChar('.');
@@ -2089,16 +2104,17 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
                 LogKernel("[NET] Server TCP 3-Way Handshake ACCEPTED via Intel e1000 DMA!");
                 frame->rax = 0;
             } else {
-                req->outClient = 0;
+                req.outClient = 0;
+                std::memcpy(reinterpret_cast<void*>(arg1), &req, sizeof(req));
                 frame->rax = 0x00000103ULL; // STATUS_PENDING
             }
             return 0;
         }
         if (ssn == 0x90 && micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().isDesktopActive()) {
             // Fast-path quiet NIC telemetry query for taskmgr.exe inside DWM desktop
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
-            if (vad && arg1 != 0 && arg2 >= sizeof(micant::km::e1000_baremetal::NetAdapterInfo) &&
-                arg1 + sizeof(micant::km::e1000_baremetal::NetAdapterInfo) <= vad->endVa) {
+            if (arg2 >= sizeof(micant::km::e1000_baremetal::NetAdapterInfo) &&
+                micant::km::mm_baremetal::BareMetalVadTable::get().probeUserRange(
+                    arg1, sizeof(micant::km::e1000_baremetal::NetAdapterInfo), true)) {
                 micant::km::e1000_baremetal::NetAdapterInfo info{};
                 micant::km::e1000_baremetal::BareMetalE1000Engine::get().queryAdapterInfo(info);
                 std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
@@ -2111,8 +2127,16 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
 
         if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
             if (auto* curP = mp.getCurrentProcess()) {
-                micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().destroyWindowsForPid(curP->pid);
-                micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(curP->pid);
+                uint32_t dyingPid = curP->pid;
+                micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().destroyWindowsForPid(dyingPid);
+                micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(dyingPid);
+                // Reclaim any leaked NTFS kernel file handles owned by dyingPid
+                for (size_t fh = 0; fh < MAX_KERNEL_FILE_HANDLES; ++fh) {
+                    if (s_kernelFileHandles[fh].inUse && s_kernelFileHandles[fh].ownerPid == dyingPid) {
+                        s_kernelFileHandles[fh].inUse = false;
+                        s_kernelFileHandles[fh].ownerPid = 0;
+                    }
+                }
             }
             uint32_t exitedPid = 0, nextPid = 0, wokenPid = 0;
             uint64_t nextCr3 = 0;
@@ -2121,6 +2145,15 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
             UartSerial::printDec(exitedPid);
             UartSerial::print(" ExitCode=");
             UartSerial::printDec(static_cast<uint32_t>(arg2));
+            UartSerial::print(" [ReclaimedPFN=");
+            UartSerial::printDec(static_cast<uint32_t>(mp.getTotalPagesReclaimed()));
+            UartSerial::print(" FreePFN=");
+            UartSerial::printDec(static_cast<uint32_t>(micant::km::mm_baremetal::BareMetalPfnAllocator::get().getFreePages()));
+            UartSerial::print(" RecycledSlots=");
+            UartSerial::printDec(static_cast<uint32_t>(mp.getTotalSlotsRecycled()));
+            UartSerial::print(" NtfsFreedClust=");
+            UartSerial::printDec(static_cast<uint32_t>(micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().getClustersFreed()));
+            UartSerial::print("]");
             if (wokenPid != 0) {
                 UartSerial::print(" [Woke Waiting Parent PID=");
                 UartSerial::printDec(wokenPid);
@@ -2186,8 +2219,8 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
             return 1; // Return to Ring 0 caller!
         }
 
-        if (ssn == 0x04) { // NtWaitForSingleObject (SMP AP Thread Join OR Blocking Parent->Child Sync)
-            if ((arg1 & micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) != 0) {
+        if (ssn == 0x04) { // NtWaitForSingleObject (Exact 8-bit Tag: SMP AP Thread Join OR Blocking Parent->Child Sync)
+            if ((arg1 & 0xFF000000ULL) == micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) {
                 bool joined = micant::km::smp_baremetal::BareMetalSmpEngine::get().waitForThreadHandle(arg1);
                 frame->rax = joined ? 0ULL : 0xFFFFFFFFULL;
                 return 0;
@@ -2661,22 +2694,34 @@ extern "C" __attribute__((used)) uint64_t KiApSyscallDispatch(
         hwSmp.completeApRing3Thread(kpcr, static_cast<uint32_t>(arg2));
         return 1;
     }
-    if (ssn == 0x25) { // NtWriteFile (serialized UART stdout from Ring-3 AP thread)
-        if (arg1 != 0 && arg2 > 0) {
-            size_t len = (arg2 < 256) ? static_cast<size_t>(arg2) : 256;
-            const char* s = reinterpret_cast<const char*>(arg1);
+    if (ssn == 0x25) { // NtWriteFile (validated & serialized UART stdout from Ring-3 AP thread)
+        auto* th = hwSmp.getThreadSlot(static_cast<size_t>(slotIdx));
+        const auto* ownerProc = th ? micant::km::ps_baremetal::BareMetalCr3ProcessManager::get().findProcessByPid(th->ownerPid) : nullptr;
+        size_t len = (arg2 < 256) ? static_cast<size_t>(arg2) : 256;
+        bool inApStack = false;
+        if (th && th->userStackTop >= 0x10000ULL) {
+            uint64_t stEnd  = th->userStackTop + 8ULL;
+            uint64_t stBase = stEnd - 0x10000ULL;
+            inApStack = (arg1 >= stBase && arg1 < stEnd && len <= (stEnd - arg1));
+        }
+        bool inOwnerVad = (ownerProc && ownerProc->vadTable.probeUserRange(arg1, len, false));
+        if (arg1 != 0 && len > 0 && (inOwnerVad || inApStack)) {
+            char localCopy[256];
+            std::memcpy(localCopy, reinterpret_cast<const void*>(arg1), len);
             s_apUartLock.lock();
             UartSerial::print("[AP Core ");
             UartSerial::printDec(kpcr->hardwareApicId);
             UartSerial::print(" R3] ");
             for (size_t i = 0; i < len; ++i) {
-                char c = s[i];
+                char c = localCopy[i];
                 if (c >= 0x20 && c <= 0x7E) UartSerial::putChar(c);
             }
             UartSerial::print("\r\n");
             s_apUartLock.unlock();
+            frame->rax = arg2;
+        } else {
+            frame->rax = 0xC0000005ULL; // STATUS_ACCESS_VIOLATION on kernel/invalid pointer!
         }
-        frame->rax = arg2;
         return 0;
     }
     if (ssn == 0x46) { // NtYieldExecution
@@ -4307,6 +4352,20 @@ extern "C" micant::NtStatus KiSystemStartup(
         UartSerial::print("[ntoskrnl.exe] ERROR: Null LPB passed!\r\n");
         return micant::NtStatus::InvalidParameter;
     }
+
+    // Seed Ring-0 PFN Pool strictly from UEFI EfiConventionalMemory / LoaderFree descriptors!
+    size_t uefiVerifiedPfn = micant::km::mm_baremetal::BareMetalPfnAllocator::get().initializeFromDescriptors(
+        lpb->memoryDescriptors.data(),
+        lpb->memoryDescriptors.size(),
+        static_cast<uint32_t>(micant::boot::LoaderMemoryType::LoaderFree)
+    );
+    UartSerial::print("[Mm] PFN Pool Seeded from UEFI Memory Map: ");
+    UartSerial::printDec(static_cast<uint32_t>(uefiVerifiedPfn));
+    UartSerial::print(" verified 4KB free pages (");
+    UartSerial::printDec(static_cast<uint32_t>((uefiVerifiedPfn * 4) / 1024));
+    UartSerial::print(" MB | Reserved=");
+    UartSerial::printDec(static_cast<uint32_t>(micant::km::mm_baremetal::BareMetalPfnAllocator::get().getReservedUefiPages()));
+    UartSerial::print(" pages)\r\n");
 
     // Initialize Video Driver
     micant::bootvid::BootVideoDriver videoDriver;

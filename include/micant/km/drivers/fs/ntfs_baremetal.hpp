@@ -589,6 +589,39 @@ private:
         return true;
     }
 
+    // Helper: decode any Non-Resident $DATA runs of an MFT record and reclaim all clusters in $Bitmap
+    void reclaimMftDataClusters(uint64_t mftRecordNumber) noexcept {
+        if (mftRecordNumber < 16) return;
+        NtfsDataRun runsToFree[32]{};
+        size_t runCnt = 0;
+        if (readMftRecord(mftRecordNumber, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) {
+            const auto* hdr = reinterpret_cast<const MftRecordHeader*>(s_ntfsMftBuf);
+            size_t off = hdr->firstAttributeOffset;
+            while (off + sizeof(NtfsAttrHeader) <= m_mftRecordSize) {
+                const auto* attr = reinterpret_cast<const NtfsAttrHeader*>(s_ntfsMftBuf + off);
+                if (attr->type == NTFS_ATTR_END || attr->length == 0 || off + attr->length > m_mftRecordSize) break;
+                if (attr->type == NTFS_ATTR_DATA && attr->nameLength == 0 && attr->nonResident != 0) {
+                    const auto* nr = reinterpret_cast<const NtfsNonResidentAttr*>(s_ntfsMftBuf + off);
+                    if (nr->mappingPairsOffset < attr->length) {
+                        runCnt = decodeRunlist(
+                            s_ntfsMftBuf + off + nr->mappingPairsOffset,
+                            attr->length - nr->mappingPairsOffset,
+                            runsToFree,
+                            32
+                        );
+                    }
+                    break;
+                }
+                off += attr->length;
+            }
+        }
+        for (size_t r = 0; r < runCnt; ++r) {
+            if (runsToFree[r].lcn >= 256 && runsToFree[r].clusterCount > 0) {
+                freeClusters(static_cast<uint64_t>(runsToFree[r].lcn), runsToFree[r].clusterCount);
+            }
+        }
+    }
+
     // Locate an unused MFT record (record >= 16 where signature != "FILE" or InUse flag == 0)
     bool allocateMftRecord(uint64_t& outRecNum) noexcept {
         outRecNum = 0;
@@ -616,8 +649,9 @@ private:
         uint64_t& outAllocSize
     ) noexcept {
         outAllocSize = 0;
-        alignas(16) uint8_t recBuf[1024]{};
-        std::memset(recBuf, 0, sizeof(recBuf));
+        alignas(16) uint8_t recBuf[4096]{};
+        if (m_mftRecordSize == 0 || m_mftRecordSize > sizeof(recBuf)) return false;
+        std::memset(recBuf, 0, m_mftRecordSize);
 
         constexpr uint64_t NT_TIME = 133769000000000000ULL;
         constexpr uint16_t USA_OFF = 0x30;
@@ -1217,14 +1251,16 @@ public:
         m_dmaReadsIssued++;
         if (ahci.readSectors(1, 1, s_gptSec)) {
             const auto* gpt = reinterpret_cast<const GptHeader*>(s_gptSec);
-            if (gpt->signature == 0x5452415020494645ULL && gpt->sizeOfPartitionEntry >= 128) {
-                uint32_t maxCheck = (gpt->numPartitionEntries < 16) ? gpt->numPartitionEntries : 16;
+            if (gpt->signature == 0x5452415020494645ULL &&
+                gpt->sizeOfPartitionEntry >= 128 && gpt->sizeOfPartitionEntry <= 512) {
+                uint32_t maxFit = static_cast<uint32_t>(sizeof(s_gptEntries) / gpt->sizeOfPartitionEntry);
+                uint32_t maxCheck = (gpt->numPartitionEntries < maxFit) ? gpt->numPartitionEntries : maxFit;
                 m_dmaReadsIssued++;
                 if (ahci.readSectors(gpt->partitionEntryLba, 4, s_gptEntries)) {
                     for (uint32_t i = 0; i < maxCheck; ++i) {
-                        const auto* pe = reinterpret_cast<const GptPartitionEntry*>(
-                            s_gptEntries + static_cast<size_t>(i) * gpt->sizeOfPartitionEntry
-                        );
+                        size_t peOff = static_cast<size_t>(i) * gpt->sizeOfPartitionEntry;
+                        if (peOff + sizeof(GptPartitionEntry) > sizeof(s_gptEntries)) break;
+                        const auto* pe = reinterpret_cast<const GptPartitionEntry*>(s_gptEntries + peOff);
                         if (pe->startingLba != 0 && pe->endingLba > pe->startingLba) {
                             if (tryMountAtLba(pe->startingLba)) {
                                 return true;
@@ -1685,6 +1721,8 @@ public:
         NtfsDirEntry existing{};
         if (findChildInDirectory(parentDir.mftRecordNumber, leafName, leafLen, existing)) {
             if (existing.isDirectory) return false;
+            // Reclaim any prior Non-Resident $DATA clusters in $Bitmap before overwriting (zero cluster leaks!)
+            reclaimMftDataClusters(existing.mftRecordNumber);
             uint64_t allocSize = 0;
             return buildAndCommitFileMftRecord(
                 existing.mftRecordNumber, parentDir.mftRecordNumber, leafName, data, dataSize, allocSize
@@ -1756,8 +1794,9 @@ public:
         uint64_t newRecNum = 0;
         if (!allocateMftRecord(newRecNum)) return false;
 
-        alignas(16) uint8_t recBuf[1024]{};
-        std::memset(recBuf, 0, sizeof(recBuf));
+        alignas(16) uint8_t recBuf[4096]{};
+        if (m_mftRecordSize == 0 || m_mftRecordSize > sizeof(recBuf)) return false;
+        std::memset(recBuf, 0, m_mftRecordSize);
         constexpr uint64_t NT_TIME = 133769000000000000ULL;
         constexpr uint16_t USA_OFF = 0x30;
         uint16_t usaCount = static_cast<uint16_t>(1 + (m_mftRecordSize / 512));

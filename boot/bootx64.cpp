@@ -2416,26 +2416,27 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     }
     micant::bootloader::UartSerial::print("\r\n[MicaNT Boot] Calling ExitBootServices to terminate UEFI firmware...\r\n");
 
-    memoryMapSize = sizeof(s_memoryMapBuffer);
-    systemTable->bootServices->getMemoryMap(
-        &memoryMapSize,
-        reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
-        &mapKey,
-        &descriptorSize,
-        &descriptorVersion
-    );
-
-    micant::uefi::EfiStatus exitStatus = engine.exitBootServices(mapKey);
-    if (exitStatus != micant::uefi::EFI_SUCCESS) {
+    micant::uefi::EfiStatus exitStatus = micant::uefi::EFI_INVALID_PARAMETER;
+    for (int attempt = 0; attempt < 5; ++attempt) {
         memoryMapSize = sizeof(s_memoryMapBuffer);
-        systemTable->bootServices->getMemoryMap(
+        micant::uefi::EfiStatus mmSt = systemTable->bootServices->getMemoryMap(
             &memoryMapSize,
             reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
             &mapKey,
             &descriptorSize,
             &descriptorVersion
         );
-        engine.exitBootServices(mapKey);
+        if (mmSt != micant::uefi::EFI_SUCCESS) break;
+        exitStatus = engine.exitBootServices(mapKey);
+        if (exitStatus == micant::uefi::EFI_SUCCESS) break;
+    }
+    if (exitStatus != micant::uefi::EFI_SUCCESS) {
+        micant::bootloader::UartSerial::print("[MicaNT Boot] FATAL: ExitBootServices failed after 5 retries! Halting.\r\n");
+        while (true) {
+#if defined(__x86_64__)
+            __asm__ __volatile__("cli; hlt");
+#endif
+        }
     }
 
     micant::bootloader::UartSerial::print("[MicaNT Boot] ExitBootServices SUCCESS! CPU now in pure 64-bit Long Mode.\r\n");
