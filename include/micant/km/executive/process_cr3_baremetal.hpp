@@ -658,6 +658,36 @@ public:
     }
 
     /**
+     * @brief Terminate a non-current process by PID (e.g. from Ring-3 taskkill.exe), reclaiming its CR3 & waking waiters.
+     */
+    bool terminateTargetPid(uint32_t targetPid, uint32_t exitCode) noexcept {
+        if (!m_active || targetPid <= 4) return false;
+        int idx = findSlotByPid(targetPid);
+        if (idx < 0 || static_cast<size_t>(idx) == m_currentIdx) return false;
+        auto& target = m_procs[idx];
+        if (target.state == Cr3ProcState::Terminated || target.state == Cr3ProcState::Free) return false;
+
+        target.exitCode = exitCode;
+        target.state = Cr3ProcState::Terminated;
+        m_totalProcessesExited++;
+        m_exitHistory[m_exitHistoryHead % MAX_EXIT_HISTORY] = ExitHistoryEntry{target.pid, exitCode};
+        m_exitHistoryHead++;
+
+        if (target.cr3Phys != 0) {
+            m_totalPagesReclaimed += mm_baremetal::BareMetalPaging::destroyProcessPml4(target.cr3Phys);
+            target.cr3Phys = 0;
+        }
+        for (size_t i = 0; i < MAX_PROCS; ++i) {
+            if (m_procs[i].inUse && m_procs[i].state == Cr3ProcState::Waiting && m_procs[i].waitTargetPid == target.pid) {
+                m_procs[i].state = Cr3ProcState::Ready;
+                m_procs[i].waitTargetPid = 0;
+                m_totalWaitWakeups++;
+            }
+        }
+        return true;
+    }
+
+    /**
      * @brief Handle NtTerminateProcess (SSN 0x01) in multi-process CR3 mode, waking any Waiting parents
      *        and immediately reclaiming the terminating process's private PML4[1] PFN pages!
      */

@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstring>
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
+#include "micant/km/drivers/storage/nvme_baremetal.hpp"
 
 namespace micant::km::ntfs_baremetal {
 
@@ -261,8 +262,15 @@ alignas(4096) static uint8_t s_ntfsIoClusterBuf[65536]; // 64 KB DMA transfer wi
 // ============================================================================
 
 class BareMetalNtfsVolume {
+public:
+    using ReadSectorsFn  = bool (*)(void* ctx, uint64_t lba, uint16_t count, void* dst) noexcept;
+    using WriteSectorsFn = bool (*)(void* ctx, uint64_t lba, uint16_t count, const void* src) noexcept;
+
 private:
-    ahci_baremetal::BareMetalAhciController* m_ahci{nullptr};
+    void*          m_blkCtx{nullptr};
+    ReadSectorsFn  m_blkRead{nullptr};
+    WriteSectorsFn m_blkWrite{nullptr};
+    const char*    m_transportName{"None"};
     bool     m_mounted{false};
     uint64_t m_partitionLba{0};
     uint64_t m_totalSectors{0};
@@ -395,16 +403,24 @@ private:
         return runIdx;
     }
 
-    bool readPartitionSectors(uint64_t relLba, uint16_t count, void* dst) noexcept {
-        if (!m_ahci) return false;
+    bool readRawSectors(uint64_t absLba, uint16_t count, void* dst) noexcept {
+        if (!m_blkRead || !m_blkCtx) return false;
         m_dmaReadsIssued++;
-        return m_ahci->readSectors(m_partitionLba + relLba, count, dst);
+        return m_blkRead(m_blkCtx, absLba, count, dst);
+    }
+
+    bool writeRawSectors(uint64_t absLba, uint16_t count, const void* src) noexcept {
+        if (!m_blkWrite || !m_blkCtx) return false;
+        m_dmaWritesIssued++;
+        return m_blkWrite(m_blkCtx, absLba, count, src);
+    }
+
+    bool readPartitionSectors(uint64_t relLba, uint16_t count, void* dst) noexcept {
+        return readRawSectors(m_partitionLba + relLba, count, dst);
     }
 
     bool writePartitionSectors(uint64_t relLba, uint16_t count, const void* src) noexcept {
-        if (!m_ahci) return false;
-        m_dmaWritesIssued++;
-        return m_ahci->writeSectors(m_partitionLba + relLba, count, src);
+        return writeRawSectors(m_partitionLba + relLba, count, src);
     }
 
     // Seal Update Sequence Array (USA) fixups before committing a 1024B MFT or 4096B INDX block to disk
@@ -461,9 +477,9 @@ private:
         return pos;
     }
 
-    // Write and USA-seal an MFT record directly to disk via AHCI Bus-Master DMA
+    // Write and USA-seal an MFT record directly to disk via Bus-Master DMA (NVMe or AHCI)
     bool writeMftRecord(uint64_t recordNumber, const uint8_t* unfixedRecBuf) noexcept {
-        if (!m_ahci || !unfixedRecBuf) return false;
+        if (!m_blkWrite || !m_blkCtx || !unfixedRecBuf) return false;
         std::memcpy(s_ntfsWriteMftBuf, unfixedRecBuf, m_mftRecordSize);
         const auto* hdr = reinterpret_cast<const MftRecordHeader*>(s_ntfsWriteMftBuf);
         if (hdr->signature != NTFS_FILE_MAGIC) return false;
@@ -1022,8 +1038,7 @@ private:
 
     bool tryMountAtLba(uint64_t partLba) noexcept {
         std::memset(s_ntfsSectorBuf, 0, 512);
-        m_dmaReadsIssued++;
-        if (!m_ahci->readSectors(partLba, 1, s_ntfsSectorBuf)) {
+        if (!readRawSectors(partLba, 1, s_ntfsSectorBuf)) {
             return false;
         }
 
@@ -1211,7 +1226,8 @@ public:
         return instance;
     }
 
-    [[nodiscard]] bool isMounted() const noexcept { return m_mounted; }
+    [[nodiscard]] bool        isMounted() const noexcept { return m_mounted; }
+    [[nodiscard]] const char* getTransportName() const noexcept { return m_transportName; }
     [[nodiscard]] const char* getVolumeLabel() const noexcept { return m_volumeLabel; }
     [[nodiscard]] uint64_t getPartitionLba() const noexcept { return m_partitionLba; }
     [[nodiscard]] uint64_t getTotalSectors() const noexcept { return m_totalSectors; }
@@ -1233,30 +1249,29 @@ public:
     [[nodiscard]] uint32_t getFilesDeleted() const noexcept { return m_filesDeleted; }
 
     /**
-     * @brief Probe GPT, MBR, and Raw LBA 0 via real AHCI DMA and mount the NTFS 3.1 volume.
+     * @brief Probe GPT, MBR, and Raw LBA 0 via any Bus-Master DMA block controller (NVMe or AHCI) and mount NTFS 3.1.
      */
-    bool mount(ahci_baremetal::BareMetalAhciController& ahci) noexcept {
-        m_ahci = &ahci;
+    bool mountBlockDevice(void* ctx, ReadSectorsFn rd, WriteSectorsFn wr, const char* transportName) noexcept {
+        m_blkCtx = ctx;
+        m_blkRead = rd;
+        m_blkWrite = wr;
+        m_transportName = transportName ? transportName : "DMA";
         m_mounted = false;
         m_usaFixupsVerified = 0;
         m_dmaReadsIssued = 0;
 
-        if (!ahci.isInitialized() || !ahci.isPort1Online()) {
-            return false;
-        }
+        if (!m_blkCtx || !m_blkRead) return false;
 
         // 1. Check GPT Header at LBA 1 ("EFI PART")
         alignas(512) static uint8_t s_gptSec[512];
         alignas(512) static uint8_t s_gptEntries[2048]; // 16 entries (4 sectors)
-        m_dmaReadsIssued++;
-        if (ahci.readSectors(1, 1, s_gptSec)) {
+        if (readRawSectors(1, 1, s_gptSec)) {
             const auto* gpt = reinterpret_cast<const GptHeader*>(s_gptSec);
             if (gpt->signature == 0x5452415020494645ULL &&
                 gpt->sizeOfPartitionEntry >= 128 && gpt->sizeOfPartitionEntry <= 512) {
                 uint32_t maxFit = static_cast<uint32_t>(sizeof(s_gptEntries) / gpt->sizeOfPartitionEntry);
                 uint32_t maxCheck = (gpt->numPartitionEntries < maxFit) ? gpt->numPartitionEntries : maxFit;
-                m_dmaReadsIssued++;
-                if (ahci.readSectors(gpt->partitionEntryLba, 4, s_gptEntries)) {
+                if (readRawSectors(gpt->partitionEntryLba, 4, s_gptEntries)) {
                     for (uint32_t i = 0; i < maxCheck; ++i) {
                         size_t peOff = static_cast<size_t>(i) * gpt->sizeOfPartitionEntry;
                         if (peOff + sizeof(GptPartitionEntry) > sizeof(s_gptEntries)) break;
@@ -1273,8 +1288,7 @@ public:
 
         // 2. Check MBR Partition Table at LBA 0
         alignas(512) static uint8_t s_mbrSec[512];
-        m_dmaReadsIssued++;
-        if (ahci.readSectors(0, 1, s_mbrSec)) {
+        if (readRawSectors(0, 1, s_mbrSec)) {
             const auto* mbr = reinterpret_cast<const MbrSector*>(s_mbrSec);
             if (mbr->signature == 0xAA55) {
                 for (int i = 0; i < 4; ++i) {
@@ -1291,11 +1305,33 @@ public:
         return tryMountAtLba(0);
     }
 
+    bool mount(ahci_baremetal::BareMetalAhciController& ahci) noexcept {
+        if (!ahci.isInitialized() || !ahci.isPort1Online()) return false;
+        auto rd = [](void* c, uint64_t lba, uint16_t cnt, void* dst) noexcept -> bool {
+            return static_cast<ahci_baremetal::BareMetalAhciController*>(c)->readSectors(lba, cnt, dst);
+        };
+        auto wr = [](void* c, uint64_t lba, uint16_t cnt, const void* src) noexcept -> bool {
+            return static_cast<ahci_baremetal::BareMetalAhciController*>(c)->writeSectors(lba, cnt, src);
+        };
+        return mountBlockDevice(&ahci, rd, wr, "AHCI SATA DMA");
+    }
+
+    bool mount(nvme_baremetal::BareMetalNvmeController& nvme) noexcept {
+        if (!nvme.isInitialized() || !nvme.isOnline()) return false;
+        auto rd = [](void* c, uint64_t lba, uint16_t cnt, void* dst) noexcept -> bool {
+            return static_cast<nvme_baremetal::BareMetalNvmeController*>(c)->readSectors(lba, cnt, dst);
+        };
+        auto wr = [](void* c, uint64_t lba, uint16_t cnt, const void* src) noexcept -> bool {
+            return static_cast<nvme_baremetal::BareMetalNvmeController*>(c)->writeSectors(lba, cnt, src);
+        };
+        return mountBlockDevice(&nvme, rd, wr, "NVMe PCIe DMA");
+    }
+
     /**
-     * @brief Read and USA-verify an NTFS MFT Record directly from AHCI disk sectors.
+     * @brief Read and USA-verify an NTFS MFT Record directly from block storage sectors (NVMe/AHCI).
      */
     bool readMftRecord(uint64_t recordNumber, uint8_t* outBuf, size_t bufSize) noexcept {
-        if (!m_ahci || !outBuf || bufSize < m_mftRecordSize) return false;
+        if (!m_blkRead || !m_blkCtx || !outBuf || bufSize < m_mftRecordSize) return false;
         uint64_t relLba = mftRecordToRelLba(recordNumber);
         uint16_t recSectors = static_cast<uint16_t>(m_mftRecordSize / m_bytesPerSector);
         if (!readPartitionSectors(relLba, recSectors, outBuf)) {
@@ -1583,20 +1619,18 @@ public:
     }
 
     /**
-     * @brief Read an entire file (Resident OR Non-Resident multi-extent $DATA) via real AHCI DMA.
+     * @brief Unlimited offset-based chunked file read (removes any 64 KB cap! Supports multi-MB Ring-3 streaming).
      */
-    bool readFile(const char* path, void* outBuf, size_t maxBytes, size_t& outBytesRead) noexcept {
+    bool readFileRange(
+        uint64_t mftRecordNumber,
+        uint64_t byteOffset,
+        void* outBuf,
+        size_t maxBytes,
+        size_t& outBytesRead
+    ) noexcept {
         outBytesRead = 0;
-        if (!m_mounted || !path || !outBuf || maxBytes == 0) return false;
-
-        NtfsDirEntry entry{};
-        if (!findPath(path, entry) || entry.isDirectory) {
-            return false;
-        }
-
-        if (!readMftRecord(entry.mftRecordNumber, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) {
-            return false;
-        }
+        if (!m_mounted || !outBuf || maxBytes == 0) return false;
+        if (!readMftRecord(mftRecordNumber, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) return false;
 
         const auto* hdr = reinterpret_cast<const MftRecordHeader*>(s_ntfsMftBuf);
         size_t off = hdr->firstAttributeOffset;
@@ -1606,16 +1640,17 @@ public:
 
             if (attr->type == NTFS_ATTR_DATA && attr->nameLength == 0) {
                 if (attr->nonResident == 0) {
-                    // Resident $DATA directly inside the MFT record
                     const auto* res = reinterpret_cast<const NtfsResidentAttr*>(s_ntfsMftBuf + off);
                     if (res->valueOffset + res->valueLength > attr->length) return false;
-                    size_t toCopy = (res->valueLength < maxBytes) ? res->valueLength : maxBytes;
-                    std::memcpy(outBuf, s_ntfsMftBuf + off + res->valueOffset, toCopy);
+                    if (byteOffset >= res->valueLength) { outBytesRead = 0; return true; }
+                    size_t avail = static_cast<size_t>(res->valueLength - byteOffset);
+                    size_t toCopy = (avail < maxBytes) ? avail : maxBytes;
+                    std::memcpy(outBuf, s_ntfsMftBuf + off + res->valueOffset + byteOffset, toCopy);
                     outBytesRead = toCopy;
                     return true;
                 } else {
-                    // Non-Resident $DATA via mapping-pair runlist + real AHCI DMA reads
                     const auto* nr = reinterpret_cast<const NtfsNonResidentAttr*>(s_ntfsMftBuf + off);
+                    if (byteOffset >= nr->realSize) { outBytesRead = 0; return true; }
                     NtfsDataRun runs[64]{};
                     size_t runCnt = decodeRunlist(
                         s_ntfsMftBuf + off + nr->mappingPairsOffset,
@@ -1624,23 +1659,36 @@ public:
                         64
                     );
 
-                    size_t targetSize = (nr->realSize < maxBytes) ? static_cast<size_t>(nr->realSize) : maxBytes;
+                    uint64_t availTotal = nr->realSize - byteOffset;
+                    size_t targetSize = (availTotal < maxBytes) ? static_cast<size_t>(availTotal) : maxBytes;
                     auto* dst = static_cast<uint8_t*>(outBuf);
                     size_t copied = 0;
+                    uint64_t curFileOffset = byteOffset;
                     uint64_t maxClustersPerDma = sizeof(s_ntfsIoClusterBuf) / m_bytesPerCluster;
                     if (maxClustersPerDma == 0) maxClustersPerDma = 1;
 
+                    uint64_t runVcn = 0;
                     for (size_t r = 0; r < runCnt && copied < targetSize; ++r) {
-                        uint64_t remClusters = runs[r].clusterCount;
-                        int64_t curLcn = runs[r].lcn;
+                        uint64_t runStartByte = runVcn * m_bytesPerCluster;
+                        uint64_t runEndByte   = (runVcn + runs[r].clusterCount) * m_bytesPerCluster;
+                        runVcn += runs[r].clusterCount;
+
+                        if (runEndByte <= curFileOffset) continue;
+
+                        uint64_t skipClusters = (curFileOffset > runStartByte)
+                            ? ((curFileOffset - runStartByte) / m_bytesPerCluster)
+                            : 0;
+                        uint64_t remClusters = runs[r].clusterCount - skipClusters;
+                        int64_t curLcn = (runs[r].lcn < 0) ? -1 : (runs[r].lcn + static_cast<int64_t>(skipClusters));
+                        size_t inClusterOff = static_cast<size_t>(curFileOffset % m_bytesPerCluster);
 
                         while (remClusters > 0 && copied < targetSize) {
                             uint64_t batchClusters = (remClusters < maxClustersPerDma) ? remClusters : maxClustersPerDma;
                             size_t batchBytes = static_cast<size_t>(batchClusters * m_bytesPerCluster);
-                            size_t toCopy = (targetSize - copied < batchBytes) ? (targetSize - copied) : batchBytes;
+                            size_t usableBytes = batchBytes - inClusterOff;
+                            size_t toCopy = (targetSize - copied < usableBytes) ? (targetSize - copied) : usableBytes;
 
                             if (curLcn < 0) {
-                                // Sparse run -> zero-fill
                                 std::memset(dst + copied, 0, toCopy);
                             } else {
                                 uint64_t relLba = static_cast<uint64_t>(curLcn) * m_sectorsPerCluster;
@@ -1648,11 +1696,12 @@ public:
                                 if (!readPartitionSectors(relLba, secCount, s_ntfsIoClusterBuf)) {
                                     return false;
                                 }
-                                std::memcpy(dst + copied, s_ntfsIoClusterBuf, toCopy);
+                                std::memcpy(dst + copied, s_ntfsIoClusterBuf + inClusterOff, toCopy);
                                 curLcn += static_cast<int64_t>(batchClusters);
                             }
-
                             copied += toCopy;
+                            curFileOffset += toCopy;
+                            inClusterOff = 0;
                             remClusters -= batchClusters;
                         }
                     }
@@ -1664,6 +1713,17 @@ public:
             off += attr->length;
         }
         return false;
+    }
+
+    /**
+     * @brief Read an entire file (Resident OR Non-Resident multi-extent $DATA) via real DMA.
+     */
+    bool readFile(const char* path, void* outBuf, size_t maxBytes, size_t& outBytesRead) noexcept {
+        outBytesRead = 0;
+        if (!m_mounted || !path || !outBuf || maxBytes == 0) return false;
+        NtfsDirEntry entry{};
+        if (!findPath(path, entry) || entry.isDirectory) return false;
+        return readFileRange(entry.mftRecordNumber, 0, outBuf, maxBytes, outBytesRead);
     }
 
     /**

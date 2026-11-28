@@ -1,108 +1,187 @@
 /**
  * @file taskkill_app.cpp
- * @brief Sovereign Ring 3 Process Termination Utility for MicaNT System32.
+ * @brief Sovereign Dynamic Ring-3 Process Termination Utility (C:\Windows\System32\taskkill.exe).
  *
- * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
- * Executed in User-Mode Ring 3 (CPL=3).
+ * ZERO direct `syscall` instructions! Dynamically imports ONLY KERNEL32.dll
+ * (QuerySystemProcessesMica + TerminateProcess -> NTDLL.dll -> Ring 0).
  *
- * Implements 100% authentic Windows NT TASKKILL utility behavior:
- * - /PID <processid>: Terminates process by PID with protection check
- * - /IM <imagename>: Terminates process by image name
- * - /F: Force termination
- * - /T: Tree termination
- * - /?: Displays usage and syntax
+ * Usage:
+ *   taskkill.exe /PID <pid> [/F]
+ *   taskkill.exe /IM <image.exe> [/F]
  */
 
-#include "cli_common.hpp"
+#include <cstdint>
+#include <cstddef>
+#include "micant/shared/abi/proc.hpp"
+
+extern "C" {
+
+void* memset(void* dst, int c, size_t n) noexcept {
+    auto* d = static_cast<unsigned char*>(dst);
+    while (n--) *d++ = static_cast<unsigned char>(c);
+    return dst;
+}
+
+__declspec(dllimport) void*       GetStdHandle(uint32_t nStdHandle) noexcept;
+__declspec(dllimport) int32_t     WriteFile(void* hFile, const void* buf, uint32_t len, uint32_t* written, void* ov) noexcept;
+__declspec(dllimport) const char* GetCommandLineA() noexcept;
+__declspec(dllimport) uint32_t    GetCurrentProcessId() noexcept;
+__declspec(dllimport) int32_t     QuerySystemProcessesMica(void* outBuf, uint32_t bufLen) noexcept;
+__declspec(dllimport) int32_t     TerminateProcess(void* hProcess, uint32_t uExitCode) noexcept;
+__declspec(dllimport) void        ExitProcess(uint32_t uExitCode) noexcept;
+
+} // extern "C"
 
 namespace {
 
-using namespace micant_cli;
+static constexpr uint32_t STD_OUTPUT_HANDLE = 0xFFFFFFF5u;
 
-void ShowHelp() noexcept {
-    PrintLine("TASKKILL [/S system [/U username [/P [password]]]]");
-    PrintLine("         { [/FI filter] [/PID processid | /IM imagename] } [/T] [/F]");
-    PrintLine("");
-    PrintLine("Description:");
-    PrintLine("    This tool is used to terminate tasks by process id (PID) or image name.");
-    PrintLine("");
-    PrintLine("Parameter List:");
-    PrintLine("    /S    system           Specifies the remote system to connect to.");
-    PrintLine("    /U    [domain\\]user    Specifies the user context under which to execute.");
-    PrintLine("    /P    [password]       Specifies the password for the given user context.");
-    PrintLine("    /FI   filter           Applies a filter to select a set of tasks.");
-    PrintLine("    /PID  processid        Specifies the PID of the process to be terminated.");
-    PrintLine("    /IM   imagename        Specifies the image name of the process to terminate.");
-    PrintLine("    /T                     Terminates the specified process and child processes.");
-    PrintLine("    /F                     Specifies to forcefully terminate the process(es).");
-    PrintLine("    /?                     Displays this help message.");
-    PrintLine("");
-    PrintLine("Examples:");
-    PrintLine("    TASKKILL /IM notepad.exe");
-    PrintLine("    TASKKILL /PID 1230 /F");
-    PrintLine("    TASKKILL /F /IM cmd.exe /T");
+static size_t StrLen(const char* s) noexcept { size_t n = 0; while (s[n]) ++n; return n; }
+
+static bool StrCaseEq(const char* a, const char* b) noexcept {
+    size_t i = 0;
+    while (a[i] && b[i]) {
+        char ca = a[i], cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += ('a' - 'A');
+        if (cb >= 'A' && cb <= 'Z') cb += ('a' - 'A');
+        if (ca != cb) return false;
+        ++i;
+    }
+    return a[i] == '\0' && b[i] == '\0';
 }
+
+static void AppendStr(char* dst, size_t cap, const char* src) noexcept {
+    size_t d = StrLen(dst);
+    for (size_t i = 0; src[i] && d + 1 < cap; ++i) dst[d++] = src[i];
+    dst[d] = '\0';
+}
+
+static void AppendU64(char* dst, size_t cap, uint64_t v) noexcept {
+    char tmp[24]; size_t n = 0;
+    if (v == 0) tmp[n++] = '0';
+    else { while (v > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (v % 10)); v /= 10; } }
+    char rev[24];
+    for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+    rev[n] = '\0';
+    AppendStr(dst, cap, rev);
+}
+
+static void PrintLine(void* hOut, const char* s) noexcept {
+    char buf[196];
+    size_t n = 0;
+    while (s[n] && n + 3 < sizeof(buf)) { buf[n] = s[n]; ++n; }
+    buf[n++] = '\r'; buf[n++] = '\n';
+    uint32_t wr = 0;
+    WriteFile(hOut, buf, static_cast<uint32_t>(n), &wr, nullptr);
+}
+
+static int Tokenize(const char* cmd, char argvBuf[8][64]) noexcept {
+    int argc = 0; size_t i = 0;
+    while (cmd[i] && argc < 8) {
+        while (cmd[i] == ' ' || cmd[i] == '\t') ++i;
+        if (!cmd[i]) break;
+        size_t o = 0;
+        while (cmd[i] && cmd[i] != ' ' && cmd[i] != '\t' && o + 1 < 64) argvBuf[argc][o++] = cmd[i++];
+        argvBuf[argc][o] = '\0';
+        argc++;
+    }
+    return argc;
+}
+
+static bool ParseU32(const char* s, uint32_t& out) noexcept {
+    if (!s || !s[0]) return false;
+    uint32_t v = 0;
+    for (size_t i = 0; s[i]; ++i) {
+        if (s[i] < '0' || s[i] > '9') return false;
+        v = v * 10u + static_cast<uint32_t>(s[i] - '0');
+    }
+    out = v;
+    return true;
+}
+
+static micant::abi::NtSysProcSnap g_snap;
 
 } // namespace
 
-extern "C" void _start(const char* rawCmdLine = nullptr) {
-    VerifyRing3Cpl();
+extern "C" void WinMainEntry() noexcept {
+    void* hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    char argv[8][64]{};
+    int argc = Tokenize(GetCommandLineA(), argv);
 
-    CommandLineParser parser(rawCmdLine, "taskkill.exe");
-
-    if (parser.HasSwitch("?") || parser.argc() <= 1) {
-        ShowHelp();
+    if (argc < 2 || StrCaseEq(argv[1], "/?")) {
+        PrintLine(hOut, "TASKKILL /PID <pid> | /IM <imagename> [/F] - Live Ring-0 TerminateProcess");
         ExitProcess(0);
     }
 
-    const char* pidVal = parser.GetSwitchValue("pid");
-    const char* imVal = parser.GetSwitchValue("im");
+    uint32_t targetPid = 0;
+    bool hasPid = false;
+    const char* targetIm = nullptr;
+    for (int i = 1; i < argc; ++i) {
+        if (StrCaseEq(argv[i], "/PID") && i + 1 < argc) {
+            hasPid = ParseU32(argv[++i], targetPid);
+        } else if (StrCaseEq(argv[i], "/IM") && i + 1 < argc) {
+            targetIm = argv[++i];
+        }
+    }
 
-    if ((!pidVal || *pidVal == '\0') && (!imVal || *imVal == '\0')) {
-        PrintLine("ERROR: Invalid syntax. /PID or /IM must be specified.");
-        PrintLine("Type \"TASKKILL /?\" for usage.");
+    if (!hasPid && !targetIm) {
+        PrintLine(hOut, "[taskkill] ERROR: Specify /PID <pid> or /IM <imagename>.");
         ExitProcess(1);
     }
 
-    if (pidVal && *pidVal) {
-        if (StrEqual(pidVal, "0") || StrEqual(pidVal, "4")) {
-            char err[128];
-            StrCopy(err, "ERROR: The process with PID ", sizeof(err));
-            StrConcat(err, pidVal, sizeof(err));
-            StrConcat(err, " could not be terminated.", sizeof(err));
-            PrintLine(err);
-            PrintLine("Reason: This is critical system process. Taskkill cannot end this process.");
-            ExitProcess(1);
-        }
-
-        char msg[128];
-        StrCopy(msg, "SUCCESS: The process with PID ", sizeof(msg));
-        StrConcat(msg, pidVal, sizeof(msg));
-        StrConcat(msg, " has been terminated.", sizeof(msg));
-        PrintLine(msg);
-        ExitProcess(0);
+    if (hasPid && (targetPid == 0 || targetPid == 4)) {
+        char err[128]{};
+        AppendStr(err, sizeof(err), "[taskkill] ACCESS DENIED: Critical Ring-0 System PID ");
+        AppendU64(err, sizeof(err), targetPid);
+        AppendStr(err, sizeof(err), " is protected.");
+        PrintLine(hOut, err);
+        ExitProcess(1);
     }
 
-    if (imVal && *imVal) {
-        if (StrCaseEqual(imVal, "system") || StrCaseEqual(imVal, "smss.exe") ||
-            StrCaseEqual(imVal, "csrss.exe") || StrCaseEqual(imVal, "services.exe") ||
-            StrCaseEqual(imVal, "lsass.exe")) {
-            char err[128];
-            StrCopy(err, "ERROR: The process \"", sizeof(err));
-            StrConcat(err, imVal, sizeof(err));
-            StrConcat(err, "\" could not be terminated.", sizeof(err));
-            PrintLine(err);
-            PrintLine("Reason: This is critical system process. Taskkill cannot end this process.");
+    memset(&g_snap, 0, sizeof(g_snap));
+    QuerySystemProcessesMica(&g_snap, sizeof(g_snap));
+
+    if (!hasPid && targetIm) {
+        if (StrCaseEq(targetIm, "ntoskrnl.exe") || StrCaseEq(targetIm, "system")) {
+            PrintLine(hOut, "[taskkill] ACCESS DENIED: Critical Ring-0 System image is protected.");
             ExitProcess(1);
         }
-
-        char msg[128];
-        StrCopy(msg, "SUCCESS: The process \"", sizeof(msg));
-        StrConcat(msg, imVal, sizeof(msg));
-        StrConcat(msg, "\" has been terminated.", sizeof(msg));
-        PrintLine(msg);
-        ExitProcess(0);
+        uint32_t n = (g_snap.procCount <= 8u) ? g_snap.procCount : 8u;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (g_snap.rows[i].state != 4 && StrCaseEq(g_snap.rows[i].imageName, targetIm)) {
+                targetPid = g_snap.rows[i].pid;
+                hasPid = true;
+                break;
+            }
+        }
+        if (!hasPid) {
+            char err[128]{};
+            AppendStr(err, sizeof(err), "[taskkill] ERROR: Live process '");
+            AppendStr(err, sizeof(err), targetIm);
+            AppendStr(err, sizeof(err), "' not found.");
+            PrintLine(hOut, err);
+            ExitProcess(1);
+        }
     }
 
-    ExitProcess(0);
+    if (targetPid == GetCurrentProcessId()) {
+        PrintLine(hOut, "[taskkill] ERROR: Refusing self-termination.");
+        ExitProcess(1);
+    }
+
+    int32_t ok = TerminateProcess(reinterpret_cast<void*>(static_cast<uintptr_t>(targetPid)), 1u);
+    char msg[140]{};
+    if (ok) {
+        AppendStr(msg, sizeof(msg), "[taskkill] SUCCESS: Terminated live process PID=");
+        AppendU64(msg, sizeof(msg), targetPid);
+        AppendStr(msg, sizeof(msg), " via kernel32!TerminateProcess.");
+        PrintLine(hOut, msg);
+        ExitProcess(0);
+    } else {
+        AppendStr(msg, sizeof(msg), "[taskkill] ERROR: Live process PID=");
+        AppendU64(msg, sizeof(msg), targetPid);
+        AppendStr(msg, sizeof(msg), " not active or already exited.");
+        PrintLine(hOut, msg);
+        ExitProcess(1);
+    }
 }

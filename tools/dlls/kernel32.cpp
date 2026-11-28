@@ -146,6 +146,11 @@ __declspec(dllexport) void ExitProcess(uint32_t uExitCode) noexcept {
     while (true) {}
 }
 
+__declspec(dllexport) int32_t TerminateProcess(void* hProcess, uint32_t uExitCode) noexcept {
+    if (!hProcess) return 0;
+    return NtSucceeded(NtTerminateProcess(hProcess, uExitCode)) ? 1 : 0;
+}
+
 __declspec(dllexport) uint32_t GetCurrentProcessId() noexcept {
 #if defined(__x86_64__)
     uint64_t teb = 0;

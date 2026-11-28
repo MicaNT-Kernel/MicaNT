@@ -235,12 +235,10 @@ def main():
         ("tools/svchost_app.cpp", "svchost.exe"),
         ("tools/conhost_app.cpp", "conhost.exe"),
         ("tools/whoami_app.cpp", "whoami.exe"),
-        ("tools/tasklist_app.cpp", "tasklist.exe"),
         ("tools/systeminfo_app.cpp", "systeminfo.exe"),
         ("tools/netstat_app.cpp", "netstat.exe"),
         ("tools/chkdsk_app.cpp", "chkdsk.exe"),
         ("tools/diskpart_app.cpp", "diskpart.exe"),
-        ("tools/taskkill_app.cpp", "taskkill.exe"),
         ("tools/shutdown_app.cpp", "shutdown.exe"),
     ]
     for rel_src, name in svc_list:
@@ -261,6 +259,9 @@ def main():
     kernel32_implib = repo_root / "build" / "libkernel32.a"
     win32_apps = [
         ("tools/cmd_app.cpp",           "cmd.exe"),
+        ("tools/tasklist_app.cpp",      "tasklist.exe"),
+        ("tools/taskkill_app.cpp",      "taskkill.exe"),
+        ("tools/cksum_app.cpp",         "cksum.exe"),
         ("tools/win32_ntfs_probe.cpp",  "win32_ntfs_probe.exe"),
         ("tools/win32_proc_a.cpp",      "win32_proc_a.exe"),
         ("tools/win32_proc_b.cpp",      "win32_proc_b.exe"),
@@ -275,7 +276,7 @@ def main():
                 cmd_app = [
                     cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
                     "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
-                    "-mno-stack-arg-probe", "-O2",
+                    "-mno-stack-arg-probe", "-O2", f"-I{include_dir}",
                     "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
                     "-nostdlib", str(app_src), str(kernel32_implib),
                     "-o", str(app_out)

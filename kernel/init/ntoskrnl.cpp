@@ -38,7 +38,9 @@
 #include "micant/km/hal/smp_baremetal.hpp"
 #include "micant/km/drivers/usb/xhci_baremetal.hpp"
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
+#include "micant/km/drivers/storage/nvme_baremetal.hpp"
 #include "micant/km/drivers/fs/ntfs_baremetal.hpp"
+#include "micant/shared/abi/proc.hpp"
 #include "micant/km/executive/pe_loader_baremetal.hpp"
 #include "micant/km/executive/process_cr3_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
@@ -1075,7 +1077,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::printDec(req->type);
             UartSerial::print(", ");
             UartSerial::printDec(dlen);
-            UartSerial::print(" B) -> Binary regf Hive Flushed to NTFS 3.1 via AHCI DMA!\r\n");
+            UartSerial::print(" B) -> Binary regf Hive Flushed to NTFS 3.1 via ");
+            UartSerial::print(micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().getTransportName());
+            UartSerial::print("!\r\n");
             LogKernel("[Cm] NtSetValueKey (0x73): Flushed Binary regf Hive to NTFS 3.1!");
             return 0;
         }
@@ -1414,32 +1418,38 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                     UartSerial::print("  -> NtReadFile: Invalid user destination buffer -> STATUS_ACCESS_VIOLATION\r\n");
                     return static_cast<uint64_t>(-1);
                 }
-                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
-                size_t totalRead = 0;
-                if (!ntfs.readFile(he->path, s_ntfsSyscallReadBuf, sizeof(s_ntfsSyscallReadBuf), totalRead)) {
-                    UartSerial::print("  -> NtReadFile: NTFS AHCI DMA read failed\r\n");
-                    return static_cast<uint64_t>(-1);
-                }
-                if (he->cursor >= totalRead) {
+                if (he->cursor >= he->fileSize) {
                     return 0; // EOF
                 }
-                size_t avail = totalRead - static_cast<size_t>(he->cursor);
-                size_t reqLen = static_cast<size_t>(arg3 ? arg3 : avail);
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                uint64_t avail64 = he->fileSize - he->cursor;
+                size_t reqLen = static_cast<size_t>(arg3 ? arg3 : avail64);
                 size_t maxVad = static_cast<size_t>(vad->endVa - arg2);
-                size_t toCopy = avail;
-                if (reqLen < toCopy) toCopy = reqLen;
-                if (maxVad < toCopy) toCopy = maxVad;
-                std::memcpy(reinterpret_cast<void*>(arg2), s_ntfsSyscallReadBuf + he->cursor, toCopy);
-                he->cursor += toCopy;
-                UartSerial::print("  -> NtReadFile (NTFS 3.1 AHCI DMA): Handle=0x");
-                UartSerial::printHex64(arg1);
-                UartSerial::print(" -> Copied ");
-                UartSerial::printDec(static_cast<uint32_t>(toCopy));
-                UartSerial::print(" B into Ring 3 VA 0x");
-                UartSerial::printHex64(arg2);
-                UartSerial::print(" -> STATUS_SUCCESS\r\n");
-                LogKernel("[Syscall] NtReadFile (0x24): Live NTFS DMA Read into Ring 3 OK");
-                return static_cast<uint64_t>(toCopy);
+                size_t toRead = (avail64 < reqLen) ? static_cast<size_t>(avail64) : reqLen;
+                if (maxVad < toRead) toRead = maxVad;
+                if (toRead == 0) return 0;
+
+                size_t actualRead = 0;
+                if (!ntfs.readFileRange(he->mftRecordNumber, he->cursor, reinterpret_cast<void*>(arg2), toRead, actualRead)) {
+                    UartSerial::print("  -> NtReadFile: NTFS DMA range read failed\r\n");
+                    return static_cast<uint64_t>(-1);
+                }
+                he->cursor += actualRead;
+                if (he->cursor <= actualRead || actualRead < 16384) {
+                    UartSerial::print("  -> NtReadFile (NTFS 3.1 ");
+                    UartSerial::print(ntfs.getTransportName());
+                    UartSerial::print("): Handle=0x");
+                    UartSerial::printHex64(arg1);
+                    UartSerial::print(" -> Copied ");
+                    UartSerial::printDec(static_cast<uint32_t>(actualRead));
+                    UartSerial::print(" B (Pos=");
+                    UartSerial::printDec(static_cast<uint32_t>(he->cursor));
+                    UartSerial::print("/");
+                    UartSerial::printDec(static_cast<uint32_t>(he->fileSize));
+                    UartSerial::print(") -> STATUS_SUCCESS\r\n");
+                    LogKernel("[Syscall] NtReadFile (0x24): Live NTFS DMA Read into Ring 3 OK");
+                }
+                return static_cast<uint64_t>(actualRead);
             }
             auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
             auto* dev = iom.findDevice("\\Device\\Harddisk0\\Partition2");
@@ -1484,7 +1494,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 }
                 he->cursor += writeLen;
                 he->fileSize = newTotal;
-                UartSerial::print("  -> NtWriteFile (NTFS 3.1 AHCI DMA): Handle=0x");
+                UartSerial::print("  -> NtWriteFile (NTFS 3.1 ");
+                UartSerial::print(ntfs.getTransportName());
+                UartSerial::print("): Handle=0x");
                 UartSerial::printHex64(arg3);
                 UartSerial::print(" -> Committed ");
                 UartSerial::printDec(static_cast<uint32_t>(writeLen));
@@ -1495,7 +1507,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 UartSerial::print(" | USA Sealed=");
                 UartSerial::printDec(ntfs.getUsaFixupsSealed());
                 UartSerial::print(") -> STATUS_SUCCESS\r\n");
-                LogKernel("[Syscall] NtWriteFile (0x25): Committed File to NTFS 3.1 via AHCI DMA!");
+                LogKernel("[Syscall] NtWriteFile (0x25): Committed File to NTFS 3.1 via DMA!");
                 return static_cast<uint64_t>(writeLen);
             }
             auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
@@ -2126,7 +2138,26 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         }
 
         if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
-            if (auto* curP = mp.getCurrentProcess()) {
+            // Support terminating another process by PID (taskkill.exe /PID <pid>) when arg1 != -1 & != 0 & != self
+            auto* curP = mp.getCurrentProcess();
+            if (arg1 != 0 && arg1 != ~0ULL && (!curP || static_cast<uint32_t>(arg1) != curP->pid)) {
+                uint32_t targetPid = static_cast<uint32_t>(arg1);
+                bool killed = false;
+                if (targetPid > 4) {
+                    micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().destroyWindowsForPid(targetPid);
+                    micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(targetPid);
+                    for (size_t fh = 0; fh < MAX_KERNEL_FILE_HANDLES; ++fh) {
+                        if (s_kernelFileHandles[fh].inUse && s_kernelFileHandles[fh].ownerPid == targetPid) {
+                            s_kernelFileHandles[fh].inUse = false;
+                            s_kernelFileHandles[fh].ownerPid = 0;
+                        }
+                    }
+                    killed = mp.terminateTargetPid(targetPid, static_cast<uint32_t>(arg2));
+                }
+                frame->rax = killed ? 0ULL : 0xC000000DULL;
+                return 0;
+            }
+            if (curP) {
                 uint32_t dyingPid = curP->pid;
                 micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().destroyWindowsForPid(dyingPid);
                 micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(dyingPid);
@@ -2180,7 +2211,7 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
                             "[R0] NTOSKRNL: Ob Root (\\Device,\\Driver)",
                             "[R0] MM: PFN DB 32GB | NonPaged 64KB",
                             "[R0] PS: PID 0 Idle | PID 4 System",
-                            "[R0] IO: AHCI SATA 2x 2TB Disks",
+                            "[R0] IO: NVMe 1.4 PCIe / AHCI SATA",
                             "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 DMA)",
                             "[R0] EXTFS: \\DosDevices\\E: (Ext4 RO)",
                             "[R0] SE: SRM Token (S-1-5-18)",
@@ -4436,7 +4467,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         "[R0] NTOSKRNL: Ob Root (\\Device,\\Driver)",
         "[R0] MM: PFN DB 32GB | NonPaged 64KB",
         "[R0] PS: PID 0 Idle | PID 4 System",
-        "[R0] IO: AHCI SATA 2x 2TB Disks",
+        "[R0] IO: NVMe 1.4 PCIe / AHCI SATA",
         "[R0] FSRTL: \\DosDevices\\C: (FAT32)",
         "[R0] EXTFS: \\DosDevices\\E: (Ext4 RO)",
         "[R0] SE: SRM Token (S-1-5-18)",
@@ -4478,25 +4509,52 @@ extern "C" micant::NtStatus KiSystemStartup(
     iom.initialize();
     LogKernel("[Io] Phase 0: Packet-Driven I/O Subsystem Initialized (IRP Stack, Drivers, Devices).");
 
-    // Real Bare-Metal AHCI SATA Controller & Storage Engine
+    // Real Bare-Metal Storage Stack: Probe NVMe 1.4 PCIe DMA FIRST, then ICH9 AHCI SATA DMA!
     s_ntfsMounted = false;
-    static char s_storageCardText[64] = "AHCI Standby";
+    static char s_storageCardText[64] = "Storage Standby";
+    auto appendDec = [](char* dst, size_t cap, uint64_t val) noexcept {
+        char tmp[24]{};
+        size_t n = 0;
+        if (val == 0) { tmp[n++] = '0'; }
+        else {
+            while (val > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (val % 10)); val /= 10; }
+        }
+        char rev[24]{};
+        for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+        rev[n] = '\0';
+        concatStr(dst, rev, cap);
+    };
+
+    auto& nvme = micant::km::nvme_baremetal::BareMetalNvmeController::get();
+    bool nvmeOk = nvme.initialize();
+    if (nvmeOk && nvme.isOnline()) {
+        uint64_t nvmeMB = (nvme.getTotalSectors() * nvme.getSectorSize()) / (1024ULL * 1024ULL);
+        char nvLog[160];
+        copyStr(nvLog, "[Io] NVMe ", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), (nvme.getVersion() >> 16) & 0xFFFFu);
+        concatStr(nvLog, ".", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), (nvme.getVersion() >> 8) & 0xFFu);
+        concatStr(nvLog, " (PCI ", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), nvme.getPciBus());
+        concatStr(nvLog, ":", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), nvme.getPciDev());
+        concatStr(nvLog, ".", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), nvme.getPciFunc());
+        concatStr(nvLog, "): ", sizeof(nvLog));
+        concatStr(nvLog, nvme.getModel(), sizeof(nvLog));
+        concatStr(nvLog, " SN=", sizeof(nvLog));
+        concatStr(nvLog, nvme.getSerial(), sizeof(nvLog));
+        concatStr(nvLog, " (", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), nvmeMB);
+        concatStr(nvLog, " MB | ", sizeof(nvLog));
+        appendDec(nvLog, sizeof(nvLog), nvme.getSectorSize());
+        concatStr(nvLog, "B/LBA | NVMe PCIe DMA)", sizeof(nvLog));
+        LogKernel(nvLog);
+    }
+
     auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
     bool ahciOk = ahci.initialize();
     if (ahciOk && ahci.isPort1Online()) {
-        auto appendDec = [](char* dst, size_t cap, uint64_t val) noexcept {
-            char tmp[24]{};
-            size_t n = 0;
-            if (val == 0) { tmp[n++] = '0'; }
-            else {
-                while (val > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (val % 10)); val /= 10; }
-            }
-            char rev[24]{};
-            for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
-            rev[n] = '\0';
-            concatStr(dst, rev, cap);
-        };
-
         uint64_t diskMB = (ahci.getPort1TotalSectors() * 512ULL) / (1024ULL * 1024ULL);
         char diskLog[128];
         copyStr(diskLog, "[Io] AHCI Port ", sizeof(diskLog));
@@ -4513,28 +4571,49 @@ extern "C" micant::NtStatus KiSystemStartup(
         appendDec(diskLog, sizeof(diskLog), diskMB);
         concatStr(diskLog, " MB SATA AHCI DMA)", sizeof(diskLog));
         LogKernel(diskLog);
+    }
 
-        iom.setDiskIoHandler([](uint64_t lba, uint32_t count, void* buf, bool isWrite) -> bool {
-            auto& c = micant::km::ahci_baremetal::BareMetalAhciController::get();
-            if (isWrite) {
-                return c.writeSectors(lba, static_cast<uint16_t>(count), buf);
-            } else {
-                return c.readSectors(lba, static_cast<uint16_t>(count), buf);
-            }
-        });
-        LogKernel("[Io] \\Driver\\Disk Connected to AHCI DMA Storage Engine.");
-
-        // 1. Primary OS Filesystem Probe: Sovereign Bare-Metal NTFS 3.1 (AHCI DMA)
+    if ((nvmeOk && nvme.isOnline()) || (ahciOk && ahci.isPort1Online())) {
+        // 1. Primary OS Filesystem Probe: Sovereign Bare-Metal NTFS 3.1 (NVMe PCIe DMA preferred, AHCI SATA DMA fallback!)
         auto& ntfsVol = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
-        if (ntfsVol.mount(ahci)) {
+        bool mountedOnNvme = false;
+        if (nvmeOk && nvme.isOnline() && ntfsVol.mount(nvme)) {
+            mountedOnNvme = true;
             s_ntfsMounted = true;
-            subsystems[10] = "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 DMA)";
-            copyStr(s_storageCardText, "NTFS 3.1 | ", sizeof(s_storageCardText));
+        } else if (ahciOk && ahci.isPort1Online() && ntfsVol.mount(ahci)) {
+            s_ntfsMounted = true;
+        }
+
+        if (mountedOnNvme) {
+            iom.setDiskIoHandler([](uint64_t lba, uint32_t count, void* buf, bool isWrite) -> bool {
+                auto& c = micant::km::nvme_baremetal::BareMetalNvmeController::get();
+                return isWrite
+                    ? c.writeSectors(lba, static_cast<uint16_t>(count), buf)
+                    : c.readSectors(lba, static_cast<uint16_t>(count), buf);
+            });
+            LogKernel("[Io] \\Driver\\Disk Connected to NVMe 1.4 PCIe Bus-Master DMA Engine.");
+        } else if (ahciOk && ahci.isPort1Online()) {
+            iom.setDiskIoHandler([](uint64_t lba, uint32_t count, void* buf, bool isWrite) -> bool {
+                auto& c = micant::km::ahci_baremetal::BareMetalAhciController::get();
+                return isWrite
+                    ? c.writeSectors(lba, static_cast<uint16_t>(count), buf)
+                    : c.readSectors(lba, static_cast<uint16_t>(count), buf);
+            });
+            LogKernel("[Io] \\Driver\\Disk Connected to AHCI DMA Storage Engine.");
+        }
+
+        if (s_ntfsMounted) {
+            subsystems[10] = mountedOnNvme
+                ? "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 NVMe DMA)"
+                : "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 AHCI DMA)";
+            copyStr(s_storageCardText, mountedOnNvme ? "NVMe NTFS 3.1 | " : "AHCI NTFS 3.1 | ", sizeof(s_storageCardText));
             concatStr(s_storageCardText, ntfsVol.getVolumeLabel(), sizeof(s_storageCardText));
             DrawCard(2, "STORAGE & C: DRIVE", s_storageCardText, micant::bootvid::Color{100, 240, 160});
 
-            char ntfsLog[160];
-            copyStr(ntfsLog, "[NTFS] Mounted \\DosDevices\\C: (Label '", sizeof(ntfsLog));
+            char ntfsLog[180];
+            copyStr(ntfsLog, "[NTFS] Mounted \\DosDevices\\C: via ", sizeof(ntfsLog));
+            concatStr(ntfsLog, ntfsVol.getTransportName(), sizeof(ntfsLog));
+            concatStr(ntfsLog, " (Label '", sizeof(ntfsLog));
             concatStr(ntfsLog, ntfsVol.getVolumeLabel(), sizeof(ntfsLog));
             concatStr(ntfsLog, "' NTFS ", sizeof(ntfsLog));
             appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getMajorVersion());
@@ -4570,7 +4649,9 @@ extern "C" micant::NtStatus KiSystemStartup(
                     if (iniBuf[k] == '\r' || iniBuf[k] == '\n') iniBuf[k] = ' ';
                 }
                 char iniLog[160];
-                copyStr(iniLog, "[NTFS] Verified C:\\MicaNT\\system.ini via AHCI DMA (", sizeof(iniLog));
+                copyStr(iniLog, "[NTFS] Verified C:\\MicaNT\\system.ini via ", sizeof(iniLog));
+                concatStr(iniLog, ntfsVol.getTransportName(), sizeof(iniLog));
+                concatStr(iniLog, " (", sizeof(iniLog));
                 appendDec(iniLog, sizeof(iniLog), iniBytes);
                 concatStr(iniLog, " B): '", sizeof(iniLog));
                 char prev[48]{};
@@ -4660,7 +4741,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                     cm.closeKey(hPersist);
                 }
             }
-        } else {
+        } else if (ahciOk && ahci.isPort1Online()) {
             // 2. Fallback Probe: FastFAT32 (Supermicro /dev/sdb2 compatibility)
             auto probe = probeMicaSysVolume(ahci);
             if (probe.valid) {

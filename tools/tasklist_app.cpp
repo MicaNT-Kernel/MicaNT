@@ -1,221 +1,192 @@
 /**
  * @file tasklist_app.cpp
- * @brief Sovereign Ring 3 Process Enumeration Utility for MicaNT System32.
+ * @brief Sovereign Dynamic Ring-3 Live Process Enumeration Utility (C:\Windows\System32\tasklist.exe).
  *
- * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
- * Executed in User-Mode Ring 3 (CPL=3).
+ * ZERO direct `syscall` instructions! Dynamically imports ONLY KERNEL32.dll
+ * (chaining through NTDLL.dll -> Ring 0 NtQuerySystemInformation Class 5)
+ * using the canonical shared ABI header `include/micant/shared/abi/proc.hpp`.
  *
- * Implements 100% authentic Windows NT TASKLIST utility behavior:
- * - Default: Standard process list table
- * - /SVC: Displays service bindings per process
- * - /V: Verbose information (Status, Username, CPU Time, Window Title)
- * - /FO {TABLE|LIST|CSV}: Formats in Table, List, or CSV
- * - /NH: Column header suppression
- * - /?: Help and syntax
+ * Usage:
+ *   tasklist.exe       - Live Ring-0 isolated-CR3 process table + SMP metrics
+ *   tasklist.exe /V    - Verbose CR3 physical address, DLL count, CPU ticks, & syscalls
+ *   tasklist.exe /?    - Usage help
  */
 
-#include "cli_common.hpp"
+#include <cstdint>
+#include <cstddef>
+#include "micant/shared/abi/proc.hpp"
+
+extern "C" {
+
+void* memset(void* dst, int c, size_t n) noexcept {
+    auto* d = static_cast<unsigned char*>(dst);
+    while (n--) *d++ = static_cast<unsigned char>(c);
+    return dst;
+}
+
+__declspec(dllimport) void*       GetStdHandle(uint32_t nStdHandle) noexcept;
+__declspec(dllimport) int32_t     WriteFile(void* hFile, const void* buf, uint32_t len, uint32_t* written, void* ov) noexcept;
+__declspec(dllimport) const char* GetCommandLineA() noexcept;
+__declspec(dllimport) uint32_t    GetCurrentProcessId() noexcept;
+__declspec(dllimport) int32_t     QuerySystemProcessesMica(void* outBuf, uint32_t bufLen) noexcept;
+__declspec(dllimport) void        ExitProcess(uint32_t uExitCode) noexcept;
+
+} // extern "C"
 
 namespace {
 
-using namespace micant_cli;
+static constexpr uint32_t STD_OUTPUT_HANDLE = 0xFFFFFFF5u;
 
-struct TaskInfo {
-    const char* image;
-    const char* pid;
-    const char* sessionName;
-    const char* sessionNum;
-    const char* memUsage;
-    const char* services;
-    const char* status;
-    const char* userName;
-    const char* cpuTime;
-    const char* windowTitle;
-};
+static size_t StrLen(const char* s) noexcept { size_t n = 0; while (s[n]) ++n; return n; }
 
-inline constexpr TaskInfo SYSTEM_TASKS[] = {
-    { "System Idle Process", "0",    "Services", "0", "8 K",      "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:00", "N/A" },
-    { "System",              "4",    "Services", "0", "280 K",    "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:15", "N/A" },
-    { "smss.exe",            "368",  "Services", "0", "1,024 K",  "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:01", "N/A" },
-    { "csrss.exe",           "480",  "Console",  "1", "4,096 K",  "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:03", "N/A" },
-    { "wininit.exe",         "580",  "Services", "0", "1,536 K",  "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:01", "N/A" },
-    { "services.exe",        "640",  "Services", "0", "3,072 K",  "N/A",                               "Running", "NT AUTHORITY\\SYSTEM", "0:00:02", "N/A" },
-    { "lsass.exe",           "652",  "Services", "0", "7,168 K",  "KeyIso, SamSs, VaultSvc",           "Running", "NT AUTHORITY\\SYSTEM", "0:00:04", "N/A" },
-    { "svchost.exe",         "892",  "Services", "0", "12,288 K", "DcomLaunch, RpcEptMapper, RpcSs",   "Running", "NT AUTHORITY\\SYSTEM", "0:00:08", "N/A" },
-    { "svchost.exe",         "948",  "Services", "0", "8,192 K",  "LanmanServer, LanmanWorkstation",   "Running", "NT AUTHORITY\\SYSTEM", "0:00:05", "N/A" },
-    { "svchost.exe",         "1012", "Services", "0", "9,216 K",  "Dnscache, Dhcp, NlaSvc",            "Running", "NT AUTHORITY\\SYSTEM", "0:00:06", "N/A" },
-    { "surshell.exe",        "1024", "Console",  "1", "16,384 K", "N/A",                               "Running", "MICANT\\admin",        "0:00:12", "MicaNT Desktop" },
-    { "tasklist.exe",        "2048", "Console",  "1", "2,048 K",  "N/A",                               "Running", "MICANT\\admin",        "0:00:00", "N/A" }
-};
-
-void ShowHelp() noexcept {
-    PrintLine("TASKLIST [/S system [/U username [/P [password]]]]");
-    PrintLine("         [/M [module] | /SVC | /V] [/FI filter] [/FO format] [/NH]");
-    PrintLine("");
-    PrintLine("Description:");
-    PrintLine("    This tool displays a list of currently running processes on");
-    PrintLine("    either a local or remote machine.");
-    PrintLine("");
-    PrintLine("Parameter List:");
-    PrintLine("    /S     system           Specifies the remote system to connect to.");
-    PrintLine("    /U     [domain\\]user    Specifies the user context under which the command should execute.");
-    PrintLine("    /P     [password]       Specifies the password for the given user context.");
-    PrintLine("    /M     [module]         Displays all tasks currently using the given exe/dll name.");
-    PrintLine("    /SVC                    Displays services hosted in each process.");
-    PrintLine("    /V                      Displays verbose task information.");
-    PrintLine("    /FI    filter           Displays a set of tasks that match a given criteria.");
-    PrintLine("    /FO    format           Specifies the output format: TABLE, LIST, CSV.");
-    PrintLine("    /NH                     Specifies that the column header should not be displayed.");
-    PrintLine("    /?                      Displays this help message.");
+static void AppendStr(char* dst, size_t cap, const char* src) noexcept {
+    size_t d = StrLen(dst);
+    for (size_t i = 0; src[i] && d + 1 < cap; ++i) dst[d++] = src[i];
+    dst[d] = '\0';
 }
 
-void PrintTableDefault(bool noHeader) noexcept {
-    if (!noHeader) {
-        PrintLine("Image Name                     PID Session Name        Session#    Mem Usage");
-        PrintLine("========================= ======== ================ =========== ============");
-    }
-    for (const auto& t : SYSTEM_TASKS) {
-        PrintPadded(t.image, 25);
-        Print(" ");
-        PrintPadded(t.pid, 8, true);
-        Print(" ");
-        PrintPadded(t.sessionName, 16);
-        Print(" ");
-        PrintPadded(t.sessionNum, 11, true);
-        Print(" ");
-        PrintPadded(t.memUsage, 12, true);
-        PrintLine("");
-    }
+static void AppendPad(char* dst, size_t cap, const char* src, size_t width) noexcept {
+    size_t sl = StrLen(src);
+    AppendStr(dst, cap, src);
+    for (size_t i = sl; i < width; ++i) AppendStr(dst, cap, " ");
 }
 
-void PrintTableSvc(bool noHeader) noexcept {
-    if (!noHeader) {
-        PrintLine("Image Name                     PID Services");
-        PrintLine("========================= ======== ============================================");
-    }
-    for (const auto& t : SYSTEM_TASKS) {
-        PrintPadded(t.image, 25);
-        Print(" ");
-        PrintPadded(t.pid, 8, true);
-        Print(" ");
-        PrintLine(t.services);
-    }
+static void AppendU64(char* dst, size_t cap, uint64_t v) noexcept {
+    char tmp[24]; size_t n = 0;
+    if (v == 0) tmp[n++] = '0';
+    else { while (v > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (v % 10)); v /= 10; } }
+    char rev[24];
+    for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+    rev[n] = '\0';
+    AppendStr(dst, cap, rev);
 }
 
-void PrintTableVerbose(bool noHeader) noexcept {
-    if (!noHeader) {
-        PrintLine("Image Name                     PID Session Name        Session#    Mem Usage Status          User Name            CPU Time Window Title");
-        PrintLine("========================= ======== ================ =========== ============ =============== ==================== ======== ======================");
-    }
-    for (const auto& t : SYSTEM_TASKS) {
-        PrintPadded(t.image, 25);
-        Print(" ");
-        PrintPadded(t.pid, 8, true);
-        Print(" ");
-        PrintPadded(t.sessionName, 16);
-        Print(" ");
-        PrintPadded(t.sessionNum, 11, true);
-        Print(" ");
-        PrintPadded(t.memUsage, 12, true);
-        Print(" ");
-        PrintPadded(t.status, 15);
-        Print(" ");
-        PrintPadded(t.userName, 20);
-        Print(" ");
-        PrintPadded(t.cpuTime, 8, true);
-        Print(" ");
-        PrintLine(t.windowTitle);
-    }
+static void AppendU64Pad(char* dst, size_t cap, uint64_t v, size_t width) noexcept {
+    char num[24]{};
+    AppendU64(num, sizeof(num), v);
+    size_t nl = StrLen(num);
+    for (size_t i = nl; i < width; ++i) AppendStr(dst, cap, " ");
+    AppendStr(dst, cap, num);
 }
 
-void PrintCsv(bool isSvc, bool isVerbose, bool noHeader) noexcept {
-    if (!noHeader) {
-        if (isSvc) {
-            PrintLine("\"Image Name\",\"PID\",\"Services\"");
-        } else if (isVerbose) {
-            PrintLine("\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\",\"Status\",\"User Name\",\"CPU Time\",\"Window Title\"");
-        } else {
-            PrintLine("\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\"");
+static void AppendHex64(char* dst, size_t cap, uint64_t v) noexcept {
+    const char hex[] = "0123456789ABCDEF";
+    char s[19]; s[0] = '0'; s[1] = 'x';
+    for (int i = 0; i < 16; ++i) s[2 + i] = hex[(v >> (60 - i * 4)) & 0x0Fu];
+    s[18] = '\0';
+    AppendStr(dst, cap, s);
+}
+
+static bool HasFlag(const char* cmd, const char* flag) noexcept {
+    if (!cmd || !flag) return false;
+    size_t fl = StrLen(flag);
+    for (size_t i = 0; cmd[i]; ++i) {
+        size_t j = 0;
+        while (j < fl && cmd[i + j]) {
+            char a = cmd[i + j], b = flag[j];
+            if (a >= 'a' && a <= 'z') a -= ('a' - 'A');
+            if (b >= 'a' && b <= 'z') b -= ('a' - 'A');
+            if (a != b) break;
+            ++j;
         }
+        if (j == fl) return true;
     }
-    for (const auto& t : SYSTEM_TASKS) {
-        if (isSvc) {
-            Print("\""); Print(t.image); Print("\",\"");
-            Print(t.pid); Print("\",\"");
-            Print(t.services); PrintLine("\"");
-        } else if (isVerbose) {
-            Print("\""); Print(t.image); Print("\",\"");
-            Print(t.pid); Print("\",\"");
-            Print(t.sessionName); Print("\",\"");
-            Print(t.sessionNum); Print("\",\"");
-            Print(t.memUsage); Print("\",\"");
-            Print(t.status); Print("\",\"");
-            Print(t.userName); Print("\",\"");
-            Print(t.cpuTime); Print("\",\"");
-            Print(t.windowTitle); PrintLine("\"");
-        } else {
-            Print("\""); Print(t.image); Print("\",\"");
-            Print(t.pid); Print("\",\"");
-            Print(t.sessionName); Print("\",\"");
-            Print(t.sessionNum); Print("\",\"");
-            Print(t.memUsage); PrintLine("\"");
-        }
+    return false;
+}
+
+static void PrintLine(void* hOut, const char* s) noexcept {
+    char buf[196];
+    size_t n = 0;
+    while (s[n] && n + 3 < sizeof(buf)) { buf[n] = s[n]; ++n; }
+    buf[n++] = '\r'; buf[n++] = '\n';
+    uint32_t wr = 0;
+    WriteFile(hOut, buf, static_cast<uint32_t>(n), &wr, nullptr);
+}
+
+static const char* StateName(uint32_t st) noexcept {
+    switch (st) {
+        case 1: return "Ready";
+        case 2: return "Running";
+        case 3: return "Waiting";
+        case 4: return "Exited";
+        default: return "System";
     }
 }
 
-void PrintList(bool isSvc, bool isVerbose) noexcept {
-    for (const auto& t : SYSTEM_TASKS) {
-        Print("Image Name:   "); PrintLine(t.image);
-        Print("PID:          "); PrintLine(t.pid);
-        if (isSvc) {
-            Print("Services:     "); PrintLine(t.services);
-        } else if (isVerbose) {
-            Print("Session Name: "); PrintLine(t.sessionName);
-            Print("Session#:     "); PrintLine(t.sessionNum);
-            Print("Mem Usage:    "); PrintLine(t.memUsage);
-            Print("Status:       "); PrintLine(t.status);
-            Print("User Name:    "); PrintLine(t.userName);
-            Print("CPU Time:     "); PrintLine(t.cpuTime);
-            Print("Window Title: "); PrintLine(t.windowTitle);
-        } else {
-            Print("Session Name: "); PrintLine(t.sessionName);
-            Print("Session#:     "); PrintLine(t.sessionNum);
-            Print("Mem Usage:    "); PrintLine(t.memUsage);
-        }
-        PrintLine("");
-    }
-}
+static micant::abi::NtSysProcSnap g_snap;
 
 } // namespace
 
-extern "C" void _start(const char* rawCmdLine = nullptr) {
-    VerifyRing3Cpl();
-
-    CommandLineParser parser(rawCmdLine, "tasklist.exe");
-
-    if (parser.HasSwitch("?")) {
-        ShowHelp();
+extern "C" void WinMainEntry() noexcept {
+    void* hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    const char* cmd = GetCommandLineA();
+    if (HasFlag(cmd, "/?")) {
+        PrintLine(hOut, "TASKLIST [/V] [/?] - Live Ring-0 Isolated-CR3 Process Snapshot (0 Direct Syscalls)");
         ExitProcess(0);
     }
 
-    bool isSvc = parser.HasSwitch("svc");
-    bool isVerbose = parser.HasSwitch("v");
-    bool noHeader = parser.HasSwitch("nh");
-    const char* foVal = parser.GetSwitchValue("fo");
+    bool verbose = HasFlag(cmd, "/V");
+    memset(&g_snap, 0, sizeof(g_snap));
+    if (!QuerySystemProcessesMica(&g_snap, sizeof(g_snap))) {
+        PrintLine(hOut, "[tasklist] ERROR: NtQuerySystemInformation(Class 5) failed.");
+        ExitProcess(1);
+    }
 
-    bool isCsv = foVal && StrCaseEqual(foVal, "csv");
-    bool isList = foVal && StrCaseEqual(foVal, "list");
+    char hdr[140]{};
+    AppendStr(hdr, sizeof(hdr), "MicaNT Live Task List | SMP Cores=");
+    AppendU64(hdr, sizeof(hdr), g_snap.onlineCores ? g_snap.onlineCores : 4);
+    AppendStr(hdr, sizeof(hdr), " | Procs=");
+    AppendU64(hdr, sizeof(hdr), g_snap.procCount);
+    AppendStr(hdr, sizeof(hdr), " | Preempts=");
+    AppendU64(hdr, sizeof(hdr), g_snap.totalPreemptSwitches);
+    AppendStr(hdr, sizeof(hdr), " | SelfPID=");
+    AppendU64(hdr, sizeof(hdr), GetCurrentProcessId());
+    PrintLine(hOut, hdr);
 
-    if (isCsv) {
-        PrintCsv(isSvc, isVerbose, noHeader);
-    } else if (isList) {
-        PrintList(isSvc, isVerbose);
-    } else if (isSvc) {
-        PrintTableSvc(noHeader);
-    } else if (isVerbose) {
-        PrintTableVerbose(noHeader);
+    if (verbose) {
+        PrintLine(hOut, "Image Name              PID   PPID State    DLLs  Syscalls  CR3 Physical");
+        PrintLine(hOut, "==================== ====== ====== ======== ==== ========= ==================");
     } else {
-        PrintTableDefault(noHeader);
+        PrintLine(hOut, "Image Name              PID   PPID State    DLLs   Ticks  Syscalls");
+        PrintLine(hOut, "==================== ====== ====== ======== ==== ======= =========");
+    }
+
+    // Kernel System process row (PID 4)
+    {
+        char row[140]{};
+        AppendPad(row, sizeof(row), "ntoskrnl.exe", 20);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), 4, 6);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), 0, 6);
+        AppendStr(row, sizeof(row), " "); AppendPad(row, sizeof(row), "Ring0", 8);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), 0, 4);
+        if (verbose) {
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), 0, 9);
+            AppendStr(row, sizeof(row), " Ring0-Kernel-CR3");
+        } else {
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), g_snap.totalClockTicks, 7);
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), 0, 9);
+        }
+        PrintLine(hOut, row);
+    }
+
+    uint32_t n = (g_snap.procCount <= 8u) ? g_snap.procCount : 8u;
+    for (uint32_t i = 0; i < n; ++i) {
+        const auto& r = g_snap.rows[i];
+        if (r.pid == 0) continue;
+        char row[140]{};
+        AppendPad(row, sizeof(row), r.imageName[0] ? r.imageName : "proc.exe", 20);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.pid, 6);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.parentPid, 6);
+        AppendStr(row, sizeof(row), " "); AppendPad(row, sizeof(row), StateName(r.state), 8);
+        AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.dllCount, 4);
+        if (verbose) {
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.syscallCount, 9);
+            AppendStr(row, sizeof(row), " "); AppendHex64(row, sizeof(row), r.cr3Phys);
+        } else {
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.cpuTicks, 7);
+            AppendStr(row, sizeof(row), " "); AppendU64Pad(row, sizeof(row), r.syscallCount, 9);
+        }
+        PrintLine(hOut, row);
     }
 
     ExitProcess(0);

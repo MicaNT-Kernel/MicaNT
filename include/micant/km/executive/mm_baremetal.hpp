@@ -586,6 +586,81 @@ public:
         }
         return true;
     }
+
+    /**
+     * @brief MmMapIoSpace: Map a physical PCIe/MMIO BAR into the canonical high-half
+     *        supervisor-only MMIO aperture (PML4[500] @ 0xFFFFFA00'00000000) with
+     *        Uncacheable (PCD|PWT) + NX attributes so it remains globally accessible
+     *        across the kernel CR3 and every isolated per-process CR3 (even when UEFI
+     *        assigns 64-bit PCIe BARs inside PML4[1], e.g. 0xC0'0000'0000).
+     */
+    static uint64_t mapKernelMmio(uint64_t physAddr, size_t sizeBytes) noexcept {
+        if (physAddr == 0 || sizeBytes == 0) return 0;
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        uint64_t cr3 = 0;
+        __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+        uint64_t cr3Phys = cr3 & PTE_PHYS_MASK;
+        if (cr3Phys == 0) return 0;
+
+        static uint64_t s_nextMmioVa = 0xFFFFFA00'00000000ULL; // PML4[500] canonical high-half MMIO window
+        uint64_t physPage = physAddr & ~PAGE_MASK_4KB;
+        uint64_t pageOff  = physAddr & PAGE_MASK_4KB;
+        size_t totalLen   = (static_cast<size_t>(pageOff) + sizeBytes + PAGE_MASK_4KB) & ~PAGE_MASK_4KB;
+        uint64_t vaBase   = s_nextMmioVa;
+        s_nextMmioVa     += (static_cast<uint64_t>(totalLen) + 0xFFFFULL) & ~0xFFFFULL;
+
+        uint64_t savedCr0 = 0;
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(savedCr0));
+        if (savedCr0 & (1ULL << 16)) {
+            uint64_t wpOff = savedCr0 & ~(1ULL << 16);
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(wpOff) : "memory");
+        }
+        struct Cr0WpRestore {
+            uint64_t orig;
+            ~Cr0WpRestore() noexcept {
+                if (orig & (1ULL << 16)) {
+                    __asm__ __volatile__("mov %0, %%cr0" : : "r"(orig) : "memory");
+                }
+            }
+        } wpRestore{savedCr0};
+
+        auto* pml4 = reinterpret_cast<uint64_t*>(cr3Phys);
+        for (size_t off = 0; off < totalLen; off += PAGE_SIZE_4KB) {
+            uint64_t va = vaBase + off;
+            uint64_t pa = physPage + off;
+            uint64_t pml4Idx = (va >> 39) & 0x1FF;
+            uint64_t pdptIdx = (va >> 30) & 0x1FF;
+            uint64_t pdIdx   = (va >> 21) & 0x1FF;
+            uint64_t ptIdx   = (va >> 12) & 0x1FF;
+
+            if (!(pml4[pml4Idx] & PTE_PRESENT)) {
+                uint64_t newPdpt = BareMetalPfnAllocator::get().allocatePage();
+                if (!newPdpt) return 0;
+                pml4[pml4Idx] = newPdpt | PTE_PRESENT | PTE_WRITABLE; // Ring-0 only
+            }
+            auto* pdpt = reinterpret_cast<uint64_t*>(pml4[pml4Idx] & PTE_PHYS_MASK);
+            if (!(pdpt[pdptIdx] & PTE_PRESENT)) {
+                uint64_t newPd = BareMetalPfnAllocator::get().allocatePage();
+                if (!newPd) return 0;
+                pdpt[pdptIdx] = newPd | PTE_PRESENT | PTE_WRITABLE;
+            }
+            auto* pd = reinterpret_cast<uint64_t*>(pdpt[pdptIdx] & PTE_PHYS_MASK);
+            if (!(pd[pdIdx] & PTE_PRESENT)) {
+                uint64_t newPt = BareMetalPfnAllocator::get().allocatePage();
+                if (!newPt) return 0;
+                pd[pdIdx] = newPt | PTE_PRESENT | PTE_WRITABLE;
+            }
+            auto* pt = reinterpret_cast<uint64_t*>(pd[pdIdx] & PTE_PHYS_MASK);
+            pt[ptIdx] = pa | PTE_PRESENT | PTE_WRITABLE | PTE_PCD | PTE_PWT | PTE_NO_EXECUTE;
+            __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+        }
+        __asm__ __volatile__("mov %0, %%cr3" : : "r"(cr3) : "memory");
+        return vaBase + pageOff;
+#else
+        (void)sizeBytes;
+        return physAddr;
+#endif
+    }
 };
 
 // ============================================================================
